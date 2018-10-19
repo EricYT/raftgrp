@@ -1,6 +1,7 @@
 package raftgrp
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
 
@@ -8,7 +9,6 @@ import (
 
 	"github.com/coreos/etcd/etcdserver/api/rafthttp"
 	"github.com/coreos/etcd/pkg/contention"
-	"github.com/coreos/etcd/pkg/types"
 	"github.com/coreos/etcd/raft"
 	"github.com/coreos/etcd/raft/raftpb"
 
@@ -175,11 +175,13 @@ func (r *raftNode) advanceTicks(ticks int) {
 	}
 }
 
-func startNode(cfg GroupConfig, id uint64, ids []types.ID, s store.Storage) (n raft.Node) {
+func startNode(cfg GroupConfig, id uint64, members []*Member, s store.Storage) (n raft.Node) {
 	// raft instance configuration
-	peers := make([]raft.Peer, len(ids))
-	for i := range peers {
-		peers[i] = raft.Peer{ID: uint64(ids[i]), Context: []byte("None")}
+	peers := make([]raft.Peer, len(members))
+	for i := range members {
+		mem := members[i]
+		ctx, _ := json.Marshal(&mem)
+		peers[i] = raft.Peer{ID: uint64(mem.ID), Context: ctx}
 	}
 	c := &raft.Config{
 		ID:                        id,

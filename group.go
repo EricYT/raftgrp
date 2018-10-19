@@ -122,7 +122,7 @@ func NewRaftGroup(cfg GroupConfig) (grp *RaftGroup, err error) {
 	case isNew:
 		topology, err = NewRaftGroupTopology(cfg.Logger, cfg.Peers)
 		topology.SetID(types.ID(id))
-		n = startNode(cfg, id, topology.MemberIDs(), storageBackend)
+		n = startNode(cfg, id, topology.Members(), storageBackend)
 	case !isNew:
 		if err = fileutil.IsDirWriteable(cfg.MemberDir()); err != nil {
 			return nil, errors.Errorf("cannot write to member directory: %v", err)
@@ -517,12 +517,6 @@ func (g *RaftGroup) applyConfChange(cc raftpb.ConfChange) bool {
 	switch cc.Type {
 	case raftpb.ConfChangeAddNode:
 		log.Printf("[RaftGroup] receive conf change add node context: %s msg: (%#v)", string(cc.Context), cc)
-
-		//FIXME(Fatal): how to solve this
-		if string(cc.Context) == "None" {
-			break
-		}
-
 		m := new(Member)
 		if err := json.Unmarshal(cc.Context, m); err != nil {
 			lg.Panic("[RaftGroup] conf change add node unmarshal error")
