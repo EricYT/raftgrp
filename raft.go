@@ -4,7 +4,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/EricYT/raftgrp/store"
+
 	"github.com/coreos/etcd/etcdserver/api/rafthttp"
+	"github.com/coreos/etcd/etcdserver/api/snap"
 	"github.com/coreos/etcd/pkg/contention"
 	"github.com/coreos/etcd/pkg/types"
 	"github.com/coreos/etcd/raft"
@@ -41,10 +44,9 @@ type raftNodeConfig struct {
 
 	isIDRemoved func(id uint64) bool
 	raft.Node
-	raftStorage *raft.MemoryStorage
-	storage     Storage
-	heartbeat   time.Duration
-	transport   rafthttp.Transporter
+	storage   store.Storage
+	heartbeat time.Duration
+	transport rafthttp.Transporter
 }
 
 func newRaftNode(cfg raftNodeConfig) *raftNode {
@@ -98,10 +100,10 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					if err := r.storage.SaveSnap(rd.Snapshot); err != nil {
 						r.lg.Fatal("failed to save Raft snapshot", zap.Error(err))
 					}
-					r.raftStorage.ApplySnapshot(rd.Snapshot)
+					r.storage.ApplySnapshot(rd.Snapshot)
 					r.lg.Info("applied incoming Raft snapshot", zap.Uint64("snapshot-index", rd.Snapshot.Metadata.Index))
 				}
-				r.raftStorage.Append(rd.Entries)
+				r.storage.Append(rd.Entries)
 
 				// try to send messages to others
 				r.transport.Send(r.processMessages(rd.Messages))
@@ -179,16 +181,21 @@ func (r *raftNode) advanceTicks(ticks int) {
 	}
 }
 
-func startNode(cfg GroupConfig, id uint64, ids []types.ID) (n raft.Node, s *raft.MemoryStorage, w *wal.WAL) {
-	var err error
-	if w, err = wal.Create(cfg.Logger, cfg.WALDir(), nil); err != nil {
+func startNode(cfg GroupConfig, id uint64, ids []types.ID, ss *snap.Snapshotter) (n raft.Node, s store.Storage) {
+	// TODO: initialize backend storeage
+	w, err := wal.Create(cfg.Logger, cfg.WALDir(), nil)
+	if err != nil {
 		cfg.Logger.Fatal("failed to create WAL", zap.Error(err))
 	}
+	ms := raft.NewMemoryStorage()
+	s = store.NewStorage(ms, w, ss)
+	// end
+
+	// raft instance configuration
 	peers := make([]raft.Peer, len(ids))
 	for i := range peers {
 		peers[i] = raft.Peer{ID: uint64(ids[i]), Context: []byte("None")}
 	}
-	s = raft.NewMemoryStorage()
 	c := &raft.Config{
 		ID:                        id,
 		ElectionTick:              cfg.ElectionTicks,
@@ -201,23 +208,25 @@ func startNode(cfg GroupConfig, id uint64, ids []types.ID) (n raft.Node, s *raft
 	}
 
 	n = raft.StartNode(c, peers)
-	return n, s, w
+	return n, s
 }
 
-func restartNode(cfg GroupConfig, id uint64, snapshot *raftpb.Snapshot) (n raft.Node, s *raft.MemoryStorage, w *wal.WAL) {
+func restartNode(cfg GroupConfig, id uint64, snapshot *raftpb.Snapshot, ss *snap.Snapshotter) (n raft.Node, s store.Storage) {
 	var walsnap walpb.Snapshot
 	if snapshot != nil {
 		walsnap.Index, walsnap.Term = snapshot.Metadata.Index, snapshot.Metadata.Term
 	}
 
-	w, st, entrs := readWAL(cfg.Logger, cfg.WALDir(), walsnap)
-
-	s = raft.NewMemoryStorage()
+	// TODO: recover backend by snapshot
+	w, st, entrs := store.ReadWAL(cfg.Logger, cfg.WALDir(), walsnap)
+	ms := raft.NewMemoryStorage()
 	if snapshot != nil {
-		s.ApplySnapshot(*snapshot)
+		ms.ApplySnapshot(*snapshot)
 	}
-	s.SetHardState(st)
-	s.Append(entrs)
+	ms.SetHardState(st)
+	ms.Append(entrs)
+	s = store.NewStorage(ms, w, ss)
+	// end
 
 	c := &raft.Config{
 		ID:                        id,
@@ -231,6 +240,5 @@ func restartNode(cfg GroupConfig, id uint64, snapshot *raftpb.Snapshot) (n raft.
 	}
 
 	n = raft.RestartNode(c)
-
-	return n, s, w
+	return n, s
 }

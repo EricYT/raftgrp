@@ -1,12 +1,14 @@
 package raftgrp
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
 
 	"github.com/coreos/etcd/pkg/types"
 	"github.com/coreos/etcd/raft"
+	"github.com/coreos/etcd/raft/raftpb"
 	"go.uber.org/zap"
 )
 
@@ -125,6 +127,34 @@ func (t *RaftGroupTopology) RemoveMember(id types.ID) {
 			zap.String("removed-peer-id", id.String()),
 		)
 	}
+}
+
+var (
+	ErrIDRemoved  error = errors.New("topology: id removed")
+	ErrIDExist    error = errors.New("topology: id exist")
+	ErrIDNotFound error = errors.New("topology: id not found")
+)
+
+func (t *RaftGroupTopology) ValidateConfigurationChange(cc raftpb.ConfChange) error {
+	id := types.ID(cc.NodeID)
+	if t.IsIDRemoved(id) {
+		return ErrIDRemoved
+	}
+	switch cc.Type {
+	case raftpb.ConfChangeAddNode:
+		if t.MemberByID(id) != nil {
+			return ErrIDExist
+		}
+	case raftpb.ConfChangeRemoveNode:
+		if t.MemberByID(id) == nil {
+			return ErrIDNotFound
+		}
+	case raftpb.ConfChangeUpdateNode:
+		panic("not implement")
+	default:
+		panic("unknow type of configuration change")
+	}
+	return nil
 }
 
 // member

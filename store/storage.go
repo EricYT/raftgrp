@@ -1,9 +1,10 @@
-package raftgrp
+package store
 
 import (
 	"io"
 
 	"github.com/coreos/etcd/etcdserver/api/snap"
+	"github.com/coreos/etcd/raft"
 	"github.com/coreos/etcd/raft/raftpb"
 	"github.com/coreos/etcd/wal"
 	"github.com/coreos/etcd/wal/walpb"
@@ -12,6 +13,16 @@ import (
 )
 
 type Storage interface {
+	// for raft instance
+	raft.Storage
+
+	// memory storage interfaces
+	//ApplySnapshot overwrites the contents of this Storage object with
+	//those of then given snapshot
+	ApplySnapshot(snap raftpb.Snapshot) error
+	// Append the new entries to storage.
+	Append(entries []raftpb.Entry) error
+
 	// Save function saves ents and state to the underlying stable storage.
 	// Save MUST block until st and ents are on stable storage.
 	Save(st raftpb.HardState, ents []raftpb.Entry) error
@@ -22,12 +33,14 @@ type Storage interface {
 }
 
 type storage struct {
+	*raft.MemoryStorage
+
 	*wal.WAL
 	*snap.Snapshotter
 }
 
-func NewStorage(w *wal.WAL, s *snap.Snapshotter) Storage {
-	return &storage{w, s}
+func NewStorage(m *raft.MemoryStorage, w *wal.WAL, s *snap.Snapshotter) Storage {
+	return &storage{m, w, s}
 }
 
 // SaveSnap saves the snapshot to disk and release the locked
@@ -48,7 +61,7 @@ func (st *storage) SaveSnap(snap raftpb.Snapshot) error {
 	return st.WAL.ReleaseLockTo(snap.Metadata.Index)
 }
 
-func readWAL(lg *zap.Logger, waldir string, snap walpb.Snapshot) (w *wal.WAL, st raftpb.HardState, ents []raftpb.Entry) {
+func ReadWAL(lg *zap.Logger, waldir string, snap walpb.Snapshot) (w *wal.WAL, st raftpb.HardState, ents []raftpb.Entry) {
 	var err error
 
 	repaired := false

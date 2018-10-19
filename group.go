@@ -22,6 +22,8 @@ import (
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 
+	"github.com/EricYT/raftgrp/store"
+
 	stats "github.com/coreos/etcd/etcdserver/api/v2stats"
 )
 
@@ -88,9 +90,14 @@ func NewRaftGroup(cfg GroupConfig) (grp *RaftGroup, err error) {
 		n raft.Node
 
 		// TODO: replace these by backend
-		w        *wal.WAL
-		s        *raft.MemoryStorage
+		//w *wal.WAL
+		//s *raft.MemoryStorage
+
+		// TODO: leave it alone right now
 		snapshot *raftpb.Snapshot
+
+		// FIXME:
+		s store.Storage
 
 		id       uint64
 		topology *RaftGroupTopology
@@ -100,24 +107,21 @@ func NewRaftGroup(cfg GroupConfig) (grp *RaftGroup, err error) {
 		return nil, errors.Errorf("cannot access data directory: %v", terr)
 	}
 
-	haveWAL := wal.Exist(cfg.WALDir())
-
 	if err = fileutil.TouchDirAll(cfg.SnapDir()); err != nil {
 		cfg.Logger.Fatal("failed to create snapshot directory",
 			zap.String("path", cfg.SnapDir()),
 			zap.Error(err))
 	}
-
 	ss := snap.New(cfg.Logger, cfg.SnapDir())
 
 	id = cfg.ID
-
+	haveWAL := wal.Exist(cfg.WALDir())
 	switch {
 	case !haveWAL:
 		topology, err = NewRaftGroupTopology(cfg.Logger, cfg.Peers)
 		topology.SetID(types.ID(id))
 		// FIXME:
-		n, s, w = startNode(cfg, id, topology.MemberIDs())
+		n, s = startNode(cfg, id, topology.MemberIDs(), ss)
 	case haveWAL:
 		if err = fileutil.IsDirWriteable(cfg.MemberDir()); err != nil {
 			return nil, errors.Errorf("cannot write to member directory: %v", err)
@@ -134,9 +138,12 @@ func NewRaftGroup(cfg GroupConfig) (grp *RaftGroup, err error) {
 		if snapshot != nil {
 			// FIXME: Is necessary to recover something ?
 		}
-		n, s, w = restartNode(cfg, id, snapshot)
-		topology = NewTopology(cfg.Logger)
+		n, s = restartNode(cfg, id, snapshot, ss)
+		// FIXME: recover from store
+		topology, err = NewRaftGroupTopology(cfg.Logger, cfg.Peers)
 		topology.SetID(types.ID(id))
+		//topology = NewTopology(cfg.Logger)
+		//topology.SetID(types.ID(id))
 	}
 
 	heartbeat := time.Duration(cfg.TickMs) * time.Millisecond
@@ -153,8 +160,7 @@ func NewRaftGroup(cfg GroupConfig) (grp *RaftGroup, err error) {
 				isIDRemoved: func(id uint64) bool { return false }, // FIXME: cluster info
 				Node:        n,
 				heartbeat:   heartbeat,
-				raftStorage: s,
-				storage:     NewStorage(w, ss),
+				storage:     s,
 			},
 		),
 		id:       types.ID(id),
@@ -179,7 +185,7 @@ func NewRaftGroup(cfg GroupConfig) (grp *RaftGroup, err error) {
 	// add peers
 	for _, m := range grp.topology.Members() {
 		if grp.id != m.ID {
-			cfg.Logger.Info("[RaftGroup] AddPeer ",
+			cfg.Logger.Info("[RaftGroup] add peer ",
 				zap.Uint64("peer-id", uint64(m.ID)),
 				zap.String("addr", m.Addr))
 			tr.AddPeer(m.ID, []string{m.Addr})
@@ -254,7 +260,6 @@ func (g *RaftGroup) renderingMessage(ms []raftpb.Message) ([]raftpb.Message, err
 			if m.Entries == nil || len(m.Entries) == 0 {
 				continue
 			}
-			log.Printf("[RaftGroup] rendering message (%#v)", m)
 			for j := range m.Entries {
 				entry := m.Entries[j]
 				if entry.Data == nil || len(entry.Data) == 0 {
@@ -289,7 +294,7 @@ func (g *RaftGroup) Process(ctx context.Context, m raftpb.Message) error {
 }
 
 func (g *RaftGroup) IsIDRemoved(id uint64) bool {
-	return false
+	return g.topology.IsIDRemoved(types.ID(id))
 }
 
 func (g *RaftGroup) ReportUnreachable(id uint64) { g.r.ReportUnreachable(id) }
@@ -447,9 +452,27 @@ func (g *RaftGroup) applyEntryNormal(e *raftpb.Entry) {
 
 func (g *RaftGroup) applyConfChange(cc raftpb.ConfChange) bool {
 	lg := g.getLogger()
+
+	// FIXME: all peers will be added first time, context is raft.None
+	//if err := g.topology.ValidateConfigurationChange(cc); err != nil {
+	//	lg.Error("[RaftGroup] validate configureation change error",
+	//		zap.Error(err),
+	//	)
+	//	//cc.NodeID = raft.None
+	//	g.r.ApplyConfChange(cc)
+	//	return false
+	//}
+
 	g.confState = g.r.ApplyConfChange(cc)
 	switch cc.Type {
 	case raftpb.ConfChangeAddNode:
+		log.Printf("[RaftGroup] receive conf change add node context: %s msg: (%#v)", string(cc.Context), cc)
+
+		//FIXME(Fatal): how to solve this
+		if string(cc.Context) == "None" {
+			break
+		}
+
 		m := new(Member)
 		if err := json.Unmarshal(cc.Context, m); err != nil {
 			lg.Panic("[RaftGroup] conf change add node unmarshal error")
@@ -475,7 +498,7 @@ func (g *RaftGroup) applyConfChange(cc raftpb.ConfChange) bool {
 
 	case raftpb.ConfChangeUpdateNode:
 		// FIXME: maybe copy all data to another node and restart it.
-		// So we just want to change peer Address
+		// So we just want to change member Address
 		panic("not implement")
 	}
 
