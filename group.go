@@ -18,7 +18,6 @@ import (
 	"github.com/coreos/etcd/pkg/types"
 	"github.com/coreos/etcd/raft"
 	"github.com/coreos/etcd/raft/raftpb"
-	"github.com/coreos/etcd/wal"
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 
@@ -89,15 +88,11 @@ func NewRaftGroup(cfg GroupConfig) (grp *RaftGroup, err error) {
 	var (
 		n raft.Node
 
-		// TODO: replace these by backend
-		//w *wal.WAL
-		//s *raft.MemoryStorage
-
 		// TODO: leave it alone right now
 		snapshot *raftpb.Snapshot
 
 		// FIXME:
-		s store.Storage
+		storageBackend store.Storage
 
 		id       uint64
 		topology *RaftGroupTopology
@@ -107,38 +102,35 @@ func NewRaftGroup(cfg GroupConfig) (grp *RaftGroup, err error) {
 		return nil, errors.Errorf("cannot access data directory: %v", terr)
 	}
 
+	// TODO: snapshot interfaces
 	if err = fileutil.TouchDirAll(cfg.SnapDir()); err != nil {
 		cfg.Logger.Fatal("failed to create snapshot directory",
 			zap.String("path", cfg.SnapDir()),
 			zap.Error(err))
 	}
 	ss := snap.New(cfg.Logger, cfg.SnapDir())
+	snapshot, err = ss.Load()
+	if err != nil && err != snap.ErrNoSnapshot {
+		return nil, errors.Wrap(err, "new raft group error")
+	}
 
 	id = cfg.ID
-	haveWAL := wal.Exist(cfg.WALDir())
+	storageBackend, isNew := store.NewStorage(cfg.Logger, cfg.WALDir(), snapshot, ss)
+
 	switch {
-	case !haveWAL:
+	case isNew:
 		topology, err = NewRaftGroupTopology(cfg.Logger, cfg.Peers)
 		topology.SetID(types.ID(id))
 		// FIXME:
-		n, s = startNode(cfg, id, topology.MemberIDs(), ss)
-	case haveWAL:
+		n = startNode(cfg, id, topology.MemberIDs(), storageBackend)
+	case !isNew:
 		if err = fileutil.IsDirWriteable(cfg.MemberDir()); err != nil {
 			return nil, errors.Errorf("cannot write to member directory: %v", err)
-		}
-
-		if err = fileutil.IsDirWriteable(cfg.WALDir()); err != nil {
-			return nil, errors.Errorf("cannot write to WAL directory: %v", err)
-		}
-
-		snapshot, err = ss.Load()
-		if err != nil && err != snap.ErrNoSnapshot {
-			return nil, errors.Wrap(err, "new raft group error")
 		}
 		if snapshot != nil {
 			// FIXME: Is necessary to recover something ?
 		}
-		n, s = restartNode(cfg, id, snapshot, ss)
+		n = restartNode(cfg, id, storageBackend)
 		// FIXME: recover from store
 		topology, err = NewRaftGroupTopology(cfg.Logger, cfg.Peers)
 		topology.SetID(types.ID(id))
@@ -157,10 +149,10 @@ func NewRaftGroup(cfg GroupConfig) (grp *RaftGroup, err error) {
 		r: *newRaftNode(
 			raftNodeConfig{
 				lg:          cfg.Logger,
-				isIDRemoved: func(id uint64) bool { return false }, // FIXME: cluster info
+				isIDRemoved: func(id uint64) bool { return topology.IsIDRemoved(types.ID(id)) },
 				Node:        n,
 				heartbeat:   heartbeat,
-				storage:     s,
+				storage:     storageBackend,
 			},
 		),
 		id:       types.ID(id),
@@ -192,7 +184,6 @@ func NewRaftGroup(cfg GroupConfig) (grp *RaftGroup, err error) {
 		}
 	}
 	trs := NewTransport(tr, grp.renderingMessage)
-
 	grp.r.transport = trs
 
 	return grp, nil

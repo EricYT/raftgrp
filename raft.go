@@ -7,13 +7,10 @@ import (
 	"github.com/EricYT/raftgrp/store"
 
 	"github.com/coreos/etcd/etcdserver/api/rafthttp"
-	"github.com/coreos/etcd/etcdserver/api/snap"
 	"github.com/coreos/etcd/pkg/contention"
 	"github.com/coreos/etcd/pkg/types"
 	"github.com/coreos/etcd/raft"
 	"github.com/coreos/etcd/raft/raftpb"
-	"github.com/coreos/etcd/wal"
-	"github.com/coreos/etcd/wal/walpb"
 
 	"go.uber.org/zap"
 )
@@ -181,16 +178,7 @@ func (r *raftNode) advanceTicks(ticks int) {
 	}
 }
 
-func startNode(cfg GroupConfig, id uint64, ids []types.ID, ss *snap.Snapshotter) (n raft.Node, s store.Storage) {
-	// TODO: initialize backend storeage
-	w, err := wal.Create(cfg.Logger, cfg.WALDir(), nil)
-	if err != nil {
-		cfg.Logger.Fatal("failed to create WAL", zap.Error(err))
-	}
-	ms := raft.NewMemoryStorage()
-	s = store.NewStorage(ms, w, ss)
-	// end
-
+func startNode(cfg GroupConfig, id uint64, ids []types.ID, s store.Storage) (n raft.Node) {
 	// raft instance configuration
 	peers := make([]raft.Peer, len(ids))
 	for i := range peers {
@@ -206,28 +194,11 @@ func startNode(cfg GroupConfig, id uint64, ids []types.ID, ss *snap.Snapshotter)
 		PreVote:                   cfg.PreVote,
 		DisableProposalForwarding: true,
 	}
-
 	n = raft.StartNode(c, peers)
-	return n, s
+	return n
 }
 
-func restartNode(cfg GroupConfig, id uint64, snapshot *raftpb.Snapshot, ss *snap.Snapshotter) (n raft.Node, s store.Storage) {
-	var walsnap walpb.Snapshot
-	if snapshot != nil {
-		walsnap.Index, walsnap.Term = snapshot.Metadata.Index, snapshot.Metadata.Term
-	}
-
-	// TODO: recover backend by snapshot
-	w, st, entrs := store.ReadWAL(cfg.Logger, cfg.WALDir(), walsnap)
-	ms := raft.NewMemoryStorage()
-	if snapshot != nil {
-		ms.ApplySnapshot(*snapshot)
-	}
-	ms.SetHardState(st)
-	ms.Append(entrs)
-	s = store.NewStorage(ms, w, ss)
-	// end
-
+func restartNode(cfg GroupConfig, id uint64, s store.Storage) (n raft.Node) {
 	c := &raft.Config{
 		ID:                        id,
 		ElectionTick:              cfg.ElectionTicks,
@@ -238,7 +209,6 @@ func restartNode(cfg GroupConfig, id uint64, snapshot *raftpb.Snapshot, ss *snap
 		PreVote:                   cfg.PreVote,
 		DisableProposalForwarding: true,
 	}
-
 	n = raft.RestartNode(c)
-	return n, s
+	return n
 }

@@ -39,7 +39,7 @@ type storage struct {
 	*snap.Snapshotter
 }
 
-func NewStorage(m *raft.MemoryStorage, w *wal.WAL, s *snap.Snapshotter) Storage {
+func newStorage(m *raft.MemoryStorage, w *wal.WAL, s *snap.Snapshotter) *storage {
 	return &storage{m, w, s}
 }
 
@@ -61,7 +61,7 @@ func (st *storage) SaveSnap(snap raftpb.Snapshot) error {
 	return st.WAL.ReleaseLockTo(snap.Metadata.Index)
 }
 
-func ReadWAL(lg *zap.Logger, waldir string, snap walpb.Snapshot) (w *wal.WAL, st raftpb.HardState, ents []raftpb.Entry) {
+func readWAL(lg *zap.Logger, waldir string, snap walpb.Snapshot) (w *wal.WAL, st raftpb.HardState, ents []raftpb.Entry) {
 	var err error
 
 	repaired := false
@@ -86,4 +86,37 @@ func ReadWAL(lg *zap.Logger, waldir string, snap walpb.Snapshot) (w *wal.WAL, st
 		break
 	}
 	return w, st, ents
+}
+
+func ensureWAL(lg *zap.Logger, waldir string) bool {
+	if !wal.Exist(waldir) {
+		w, err := wal.Create(lg, waldir, nil)
+		if err != nil {
+			lg.Panic("[storage] create wal directory error ",
+				zap.String("wal-directory", waldir),
+				zap.Error(err),
+			)
+		}
+		w.Close()
+		return true
+	}
+	return false
+}
+
+// storage initialize functions
+func NewStorage(lg *zap.Logger, waldir string, snapshot *raftpb.Snapshot, ss *snap.Snapshotter) (*storage, bool) {
+	isNew := ensureWAL(lg, waldir)
+	walsnap := walpb.Snapshot{}
+	if snapshot != nil {
+		walsnap.Index, walsnap.Term = snapshot.Metadata.Index, snapshot.Metadata.Term
+	}
+	w, st, ents := readWAL(lg, waldir, walsnap)
+	ms := raft.NewMemoryStorage()
+	if snapshot != nil {
+		ms.ApplySnapshot(*snapshot)
+	}
+	ms.SetHardState(st)
+	ms.Append(ents)
+
+	return newStorage(ms, w, ss), isNew
 }
