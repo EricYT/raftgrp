@@ -44,11 +44,12 @@ type RaftGrouper interface {
 var _ RaftGrouper = (*RaftGroup)(nil)
 
 type RaftGroup struct {
-	appliedIndex   uint64 // must use atomic operations to access;
-	committedIndex uint64 // must use aotmic operations to access;
-	term           uint64 // must use atomic operations to access;
-	lead           uint64 // must use atomic operations to access;
-	confState      *raftpb.ConfState
+	snapshottedIndex uint64 // must use atomic operations to access;
+	appliedIndex     uint64 // must use atomic operations to access;
+	committedIndex   uint64 // must use aotmic operations to access;
+	term             uint64 // must use atomic operations to access;
+	lead             uint64 // must use atomic operations to access;
+	confState        raftpb.ConfState
 
 	id       types.ID
 	topology *RaftGroupTopology
@@ -115,13 +116,12 @@ func NewRaftGroup(cfg GroupConfig) (grp *RaftGroup, err error) {
 	}
 
 	id = cfg.ID
-	storageBackend, isNew := store.NewStorage(cfg.Logger, cfg.WALDir(), snapshot, ss)
+	storageBackend, isNew := store.NewStorage(cfg.Logger, cfg.LogDir(), snapshot, ss)
 
 	switch {
 	case isNew:
 		topology, err = NewRaftGroupTopology(cfg.Logger, cfg.Peers)
 		topology.SetID(types.ID(id))
-		// FIXME:
 		n = startNode(cfg, id, topology.MemberIDs(), storageBackend)
 	case !isNew:
 		if err = fileutil.IsDirWriteable(cfg.MemberDir()); err != nil {
@@ -320,15 +320,27 @@ func (g *RaftGroup) start() {
 // by raftNode, and helps decouple state machine logic from Raft algorithms.
 type raftReadyHandler struct {
 	updateSoftState func(*raft.SoftState)
-	applyAllEntries func([]raftpb.Entry) error
+	applyAll        func(raftpb.Snapshot, []raftpb.Entry) error
 }
 
 func (g *RaftGroup) run() {
 	lg := g.getLogger()
 
+	// raft group from snapshot
+	sn, err := g.r.storage.Snapshot()
+	if err != nil {
+		lg.Panic("[RaftGroup] fetch snapshot from storage error",
+			zap.Error(err),
+		)
+	}
+	g.setAppliedIndex(sn.Metadata.Index)
+	g.setTerm(sn.Metadata.Term)
+	g.setSnapshottedIndex(sn.Metadata.Index)
+	g.confState = sn.Metadata.ConfState
+
 	rh := &raftReadyHandler{
 		updateSoftState: g.updateSoftState,
-		applyAllEntries: g.applyAllEntries,
+		applyAll:        g.applyAll,
 	}
 	g.r.start(rh)
 
@@ -337,6 +349,9 @@ func (g *RaftGroup) run() {
 		close(g.stopping)
 		g.wgMu.Unlock()
 		g.cancel()
+
+		// wait for all goroutines before close raft node
+		g.wg.Wait()
 
 		// stop raftNode
 		g.r.stop()
@@ -373,7 +388,48 @@ func (g *RaftGroup) updateSoftState(s *raft.SoftState) {
 	g.setLead(s.Lead)
 }
 
-func (g *RaftGroup) applyAllEntries(ents []raftpb.Entry) error {
+func (g *RaftGroup) applyAll(snap raftpb.Snapshot, ents []raftpb.Entry) error {
+	if err := g.applySnapshot(snap); err != nil {
+		return err
+	}
+	if err := g.applyEntries(ents); err != nil {
+		return err
+	}
+	g.triggerSnapshot()
+	return nil
+}
+
+func (g *RaftGroup) applySnapshot(snap raftpb.Snapshot) error {
+	if raft.IsEmptySnap(snap) {
+		return nil
+	}
+
+	lg := g.getLogger()
+
+	appliedi := g.getAppliedIndex()
+	snapi := g.getSnapshottedIndex()
+	if snap.Metadata.Index <= appliedi {
+		lg.Panic("[RaftGroup] unexpected leader snapshot from outdated index",
+			zap.Uint64("current-snapshot-index", snapi),
+			zap.Uint64("current-applied-index", appliedi),
+			zap.Uint64("incoming-leader-index", snap.Metadata.Index),
+			zap.Uint64("incoming-leader-term", snap.Metadata.Term),
+		)
+	}
+
+	// TODO: sync data from leader and install all
+
+	// FIXME:
+
+	g.setAppliedIndex(snap.Metadata.Index)
+	g.setTerm(snap.Metadata.Term)
+	g.setSnapshottedIndex(snap.Metadata.Index)
+	g.confState = snap.Metadata.ConfState
+
+	return nil
+}
+
+func (g *RaftGroup) applyEntries(ents []raftpb.Entry) error {
 	lg := g.getLogger()
 	if len(ents) == 0 {
 		return nil
@@ -394,7 +450,11 @@ func (g *RaftGroup) applyAllEntries(ents []raftpb.Entry) error {
 		return nil
 	}
 
-	return g.apply(es)
+	if err := g.apply(es); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (g *RaftGroup) apply(ents []raftpb.Entry) error {
@@ -454,7 +514,7 @@ func (g *RaftGroup) applyConfChange(cc raftpb.ConfChange) bool {
 	//	return false
 	//}
 
-	g.confState = g.r.ApplyConfChange(cc)
+	g.confState = *g.r.ApplyConfChange(cc)
 	switch cc.Type {
 	case raftpb.ConfChangeAddNode:
 		log.Printf("[RaftGroup] receive conf change add node context: %s msg: (%#v)", string(cc.Context), cc)
@@ -503,6 +563,32 @@ func (g *RaftGroup) configure(ctx context.Context, cc raftpb.ConfChange) (err er
 	return nil
 }
 
+// snapshot
+func (g *RaftGroup) triggerSnapshot() {
+	appliedi := g.getAppliedIndex()
+	snapi := g.getSnapshottedIndex()
+	if appliedi-snapi <= g.Cfg.SnapshotCount {
+		return
+	}
+
+	lg := g.getLogger()
+	lg.Info("[RaftGroup] triggering snapshot",
+		zap.String("local-id", g.ID().String()),
+		zap.Uint64("local-applied-index", appliedi),
+		zap.Uint64("local-snapshot-index", snapi),
+		zap.Uint64("local-snapshot-count", g.Cfg.SnapshotCount),
+	)
+
+	g.snapshot(appliedi, g.confState)
+	g.setSnapshottedIndex(appliedi)
+}
+
+func (g *RaftGroup) snapshot(snapi uint64, cs raftpb.ConfState) {
+	// TODO: callback user fsm to gather snapshot information
+	metadata := []byte{}
+	g.r.storage.CreateSnapshot(snapi, &cs, metadata)
+}
+
 func (g *RaftGroup) HardStop() {
 	select {
 	case g.stop <- struct{}{}:
@@ -544,6 +630,14 @@ func (g *RaftGroup) getAppliedIndex() uint64 {
 	return atomic.LoadUint64(&g.appliedIndex)
 }
 
+func (g *RaftGroup) setSnapshottedIndex(v uint64) {
+	atomic.StoreUint64(&g.snapshottedIndex, v)
+}
+
+func (g *RaftGroup) getSnapshottedIndex() uint64 {
+	return atomic.LoadUint64(&g.snapshottedIndex)
+}
+
 func (g *RaftGroup) setTerm(v uint64) {
 	atomic.StoreUint64(&g.term, v)
 }
@@ -580,6 +674,24 @@ func (g *RaftGroup) CommittedIndex() uint64 { return g.getCommittedIndex() }
 func (g *RaftGroup) AppliedIndex() uint64 { return g.getAppliedIndex() }
 
 func (g *RaftGroup) Term() uint64 { return g.getTerm() }
+
+func (g *RaftGroup) goAttach(f func()) {
+	g.wgMu.Lock() // this blocks with ongoing close(s.stopping)
+	defer g.wgMu.Unlock()
+	lg := g.getLogger()
+	select {
+	case <-g.stopping:
+		lg.Warn("[RaftGroup] go attach group already shutdown")
+		return
+	default:
+	}
+
+	g.wg.Add(1)
+	go func() {
+		defer g.wg.Done()
+		f()
+	}()
+}
 
 // FIXME: for http testing
 func (g *RaftGroup) stopHttp() {

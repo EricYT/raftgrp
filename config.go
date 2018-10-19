@@ -23,14 +23,15 @@ type GroupConfig struct {
 	TickMs        uint
 	ElectionTicks int
 	PreVote       bool
+	SnapshotCount uint64
 }
 
 func (g GroupConfig) MemberDir() string {
 	return filepath.Join(g.DataDir, fmt.Sprintf("member-%d", g.ID))
 }
 
-func (g GroupConfig) WALDir() string {
-	return filepath.Join(g.MemberDir(), "wal")
+func (g GroupConfig) LogDir() string {
+	return filepath.Join(g.MemberDir(), "log")
 }
 
 func (g GroupConfig) SnapDir() string {

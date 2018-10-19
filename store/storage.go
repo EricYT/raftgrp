@@ -23,6 +23,8 @@ type Storage interface {
 	// Append the new entries to storage.
 	Append(entries []raftpb.Entry) error
 
+	CreateSnapshot(snapi uint64, cs *raftpb.ConfState, data []byte) (snap raftpb.Snapshot, err error)
+
 	// Save function saves ents and state to the underlying stable storage.
 	// Save MUST block until st and ents are on stable storage.
 	Save(st raftpb.HardState, ents []raftpb.Entry) error
@@ -34,7 +36,6 @@ type Storage interface {
 
 type storage struct {
 	*raft.MemoryStorage
-
 	*wal.WAL
 	*snap.Snapshotter
 }
@@ -58,7 +59,40 @@ func (st *storage) SaveSnap(snap raftpb.Snapshot) error {
 	if err != nil {
 		return err
 	}
-	return st.WAL.ReleaseLockTo(snap.Metadata.Index)
+	if err := st.WAL.ReleaseLockTo(snap.Metadata.Index); err != nil {
+		return err
+	}
+
+	if err := st.MemoryStorage.ApplySnapshot(snap); err != nil {
+		return err
+	}
+	return nil
+}
+
+const (
+	defaultSnapshotCatchUpEntries uint64 = 100000
+)
+
+func (st *storage) CreateSnapshot(snapi uint64, cs *raftpb.ConfState, data []byte) (snap raftpb.Snapshot, err error) {
+	snap, err = st.MemoryStorage.CreateSnapshot(snapi, cs, data)
+	if err != nil {
+		// the snapshot was done asynchronously with the progress of raft.
+		// raft might have already got a newer snapshot.
+		if err == raft.ErrSnapOutOfDate {
+			return
+		}
+		if err = st.SaveSnap(snap); err != nil {
+			return
+		}
+		compacti := uint64(1)
+		if snapi > defaultSnapshotCatchUpEntries {
+			compacti = snapi - defaultSnapshotCatchUpEntries
+		}
+		if err = st.MemoryStorage.Compact(compacti); err != nil {
+			return
+		}
+	}
+	return
 }
 
 func readWAL(lg *zap.Logger, waldir string, snap walpb.Snapshot) (w *wal.WAL, st raftpb.HardState, ents []raftpb.Entry) {

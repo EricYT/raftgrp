@@ -97,17 +97,16 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					if err := r.storage.SaveSnap(rd.Snapshot); err != nil {
 						r.lg.Fatal("failed to save Raft snapshot", zap.Error(err))
 					}
-					r.storage.ApplySnapshot(rd.Snapshot)
-					r.lg.Info("applied incoming Raft snapshot", zap.Uint64("snapshot-index", rd.Snapshot.Metadata.Index))
 				}
 				r.storage.Append(rd.Entries)
 
 				// try to send messages to others
 				r.transport.Send(r.processMessages(rd.Messages))
-				//FIXME: snapshot
 
-				// apply all entries and snapshot
-				rh.applyAllEntries(rd.CommittedEntries)
+				// apply all
+				rh.applyAll(rd.Snapshot, rd.CommittedEntries)
+
+				//FIXME: trigger a snapshot
 
 				r.Advance()
 
