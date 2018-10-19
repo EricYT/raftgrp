@@ -417,9 +417,8 @@ func (g *RaftGroup) applySnapshot(snap raftpb.Snapshot) error {
 		)
 	}
 
-	// TODO: sync data from leader and install all
-
 	// FIXME:
+	// callback user fsm to do something initialize
 
 	g.setAppliedIndex(snap.Metadata.Index)
 	g.setTerm(snap.Metadata.Term)
@@ -585,6 +584,7 @@ func (g *RaftGroup) triggerSnapshot() {
 
 func (g *RaftGroup) snapshot(snapi uint64, cs raftpb.ConfState) {
 	// TODO: callback user fsm to gather snapshot information
+
 	metadata := []byte{}
 	g.r.storage.CreateSnapshot(snapi, &cs, metadata)
 }

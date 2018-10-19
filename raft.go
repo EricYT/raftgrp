@@ -106,8 +106,6 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 				// apply all
 				rh.applyAll(rd.Snapshot, rd.CommittedEntries)
 
-				//FIXME: trigger a snapshot
-
 				r.Advance()
 
 			case <-r.stopped:
