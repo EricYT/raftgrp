@@ -40,9 +40,9 @@ func (sm *serverManager) start() error {
 	return nil
 }
 
-type Handler struct {
+type Handler interface {
 	// raft operations
-	Process func(ctx context.Context, gid uint64, m *raftpb.Message) error
+	Process(ctx context.Context, gid uint64, m *raftpb.Message) error
 
 	// file oeprations
 }

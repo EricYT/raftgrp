@@ -284,6 +284,25 @@ func (g *RaftGroup) Process(ctx context.Context, m raftpb.Message) error {
 	return g.r.Step(ctx, m)
 }
 
+func (g *RaftGroup) ProcessExtra(ctx context.Context, m *raftpb.Message) error {
+	// FIXME: m.From is removed
+	lg := g.getLogger()
+	if m.Type == raftpb.MsgApp {
+		if m.Entries != nil && len(m.Entries) != 0 {
+			//FIXME: unloading payload and rewrite message
+			log.Printf("[RaftGroup] Process message from (%#v) (%#v)", m.From, m)
+			for i := range m.Entries {
+				entry := m.Entries[i]
+				if entry.Data == nil || len(entry.Data) == 0 {
+					continue
+				}
+				lg.Debug("[RaftGroup] process append message ", zap.Any("append-entry", entry))
+			}
+		}
+	}
+	return g.r.Step(ctx, *m)
+}
+
 func (g *RaftGroup) IsIDRemoved(id uint64) bool {
 	return g.topology.IsIDRemoved(types.ID(id))
 }
