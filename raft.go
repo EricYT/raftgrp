@@ -7,7 +7,6 @@ import (
 
 	"github.com/EricYT/raftgrp/store"
 
-	"github.com/coreos/etcd/etcdserver/api/rafthttp"
 	"github.com/coreos/etcd/pkg/contention"
 	"github.com/coreos/etcd/raft"
 	"github.com/coreos/etcd/raft/raftpb"
@@ -43,7 +42,7 @@ type raftNodeConfig struct {
 	raft.Node
 	storage   store.Storage
 	heartbeat time.Duration
-	transport rafthttp.Transporter
+	transport Transporter
 }
 
 func newRaftNode(cfg raftNodeConfig) *raftNode {
@@ -147,22 +146,10 @@ func (r *raftNode) stop() {
 func (r *raftNode) onStop() {
 	r.Stop()
 	r.ticker.Stop()
-	r.transport.Stop()
 	if err := r.storage.Close(); err != nil {
 		r.lg.Panic("failed to close Raft storage", zap.Error(err))
 	}
 	close(r.done)
-}
-
-// for testing
-func (r *raftNode) pauseSending() {
-	p := r.transport.(rafthttp.Pausable)
-	p.Pause()
-}
-
-func (r *raftNode) resumeSending() {
-	p := r.transport.(rafthttp.Pausable)
-	p.Resume()
 }
 
 // advanceTicks advances ticks of Raft node.

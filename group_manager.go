@@ -57,8 +57,8 @@ func (rm *RaftGroupManager) Process(ctx context.Context, gid uint64, m *raftpb.M
 	return ErrRaftGroupManagerNotFound
 }
 
-func (rm *RaftGroupManager) CreateTransport() etransport.Transport {
-	return rm.tm.CreateTransport(rm.Logger)
+func (rm *RaftGroupManager) CreateTransport(gid uint64) etransport.Transport {
+	return rm.tm.CreateTransport(rm.Logger, gid)
 }
 
 func (rm *RaftGroupManager) NewRaftGroup(lg *zap.Logger, gid, id uint64, peers []string, datadir string) (*RaftGroup, error) {
@@ -81,7 +81,7 @@ func (rm *RaftGroupManager) NewRaftGroup(lg *zap.Logger, gid, id uint64, peers [
 		ElectionTicks: 10,
 		PreVote:       false,
 		SnapshotCount: 100000,
-	})
+	}, rm.CreateTransport(gid))
 	if err != nil {
 		return nil, errors.Wrap(err, "[RaftGroupManager] new raft group error")
 	}

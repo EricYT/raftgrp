@@ -35,6 +35,7 @@ type transportV1 struct {
 
 	mu    sync.Mutex
 	peers map[types.ID]peer
+	gid   uint64
 }
 
 func (t *transportV1) Start() error {
@@ -63,23 +64,32 @@ func (t *transportV1) Send(m []raftpb.Message) {
 				rc := c.RaftGrouperClient()
 				payload, err := msg.Marshal()
 				if err != nil {
+					t.Logger.Warn("[transportV1] marshal raft payload error",
+						zap.Any("message", msg),
+						zap.Error(err),
+					)
 					return err
 				}
 				message := &proto.SendRequest{
-					GroupId: 0x111,
+					GroupId: int64(t.gid),
 					Msg: &proto.Message{
 						Payload: payload,
 					},
 				}
 				reply, err := rc.Send(ctx, message)
 				if err != nil {
+					t.Logger.Warn("[transportV1] send message error",
+						zap.Error(err),
+					)
 					return err
 				}
-				t.Logger.Debug("[transportV1] send message success",
-					zap.Uint64("peer-id", uint64(to)),
-					zap.String("peer-addr", c.addr),
-					zap.Any("reply", reply),
-				)
+				if reply.Ok != "done" {
+					t.Logger.Debug("[transportV1] send message success",
+						zap.Uint64("peer-id", uint64(to)),
+						zap.String("peer-addr", c.addr),
+						zap.Any("reply", reply),
+					)
+				}
 				return nil
 			}); err != nil {
 				t.Logger.Warn("[transportV1] send msg to peer erorr",

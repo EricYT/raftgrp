@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/coreos/etcd/pkg/types"
 	"go.uber.org/zap"
 )
 
@@ -50,13 +51,15 @@ func NewTransportManager(lg *zap.Logger, addr string, hnd Handler) *TransportMan
 	}
 }
 
-func (tm *TransportManager) CreateTransport(lg *zap.Logger) Transport {
+func (tm *TransportManager) CreateTransport(lg *zap.Logger, gid uint64) Transport {
 	if lg == nil {
 		lg = tm.Logger
 	}
 	t := &transportV1{
 		Logger: lg,
 		mgr:    tm.ccm,
+		gid:    gid,
+		peers:  make(map[types.ID]peer),
 	}
 	return t
 }

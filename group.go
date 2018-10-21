@@ -4,14 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"log"
-	"net/http"
-	"net/url"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/coreos/etcd/etcdserver/api/rafthttp"
+	etransport "github.com/EricYT/raftgrp/transport"
 	"github.com/coreos/etcd/etcdserver/api/snap"
 	"github.com/coreos/etcd/pkg/fileutil"
 	"github.com/coreos/etcd/pkg/pbutil"
@@ -22,8 +19,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/EricYT/raftgrp/store"
-
-	stats "github.com/coreos/etcd/etcdserver/api/v2stats"
 )
 
 var (
@@ -65,10 +60,6 @@ type RaftGroup struct {
 	stopping chan struct{}
 	done     chan struct{}
 
-	// http stop channel
-	httpstopc chan struct{}
-	httpdonec chan struct{}
-
 	errorc chan error
 
 	// FIXME: not replace it right now
@@ -85,7 +76,7 @@ type RaftGroup struct {
 	leadElectedTime time.Time
 }
 
-func NewRaftGroup(cfg GroupConfig) (grp *RaftGroup, err error) {
+func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err error) {
 	var (
 		n raft.Node
 
@@ -160,30 +151,15 @@ func NewRaftGroup(cfg GroupConfig) (grp *RaftGroup, err error) {
 	}
 
 	// initialize transport
-	tr := &rafthttp.Transport{
-		Logger: cfg.Logger,
-		//DialTimeout: cfg.peerDialTimeout(),
-		ID:          grp.id,
-		ClusterID:   types.ID(0x1000), // FIXME: volume id maybe
-		Raft:        grp,
-		Snapshotter: ss,
-		ErrorC:      grp.errorc,
-		ServerStats: stats.NewServerStats("", ""),
-		LeaderStats: stats.NewLeaderStats(strconv.Itoa(int(id))),
-	}
-	if err = tr.Start(); err != nil {
-		return nil, errors.Wrap(err, "raft group start transport error")
-	}
-	// add peers
 	for _, m := range grp.topology.Members() {
 		if grp.id != m.ID {
 			cfg.Logger.Info("[RaftGroup] add peer ",
 				zap.Uint64("peer-id", uint64(m.ID)),
 				zap.String("addr", m.Addr))
-			tr.AddPeer(m.ID, []string{m.Addr})
+			t.AddPeer(m.ID, []string{m.Addr})
 		}
 	}
-	trs := NewTransport(tr, grp.renderingMessage)
+	trs := NewTransport(t, grp.renderingMessage)
 	grp.r.transport = trs
 
 	return grp, nil
@@ -194,10 +170,6 @@ func (g *RaftGroup) getLogger() *zap.Logger {
 	l := g.lg
 	g.lgMu.RUnlock()
 	return l
-}
-
-func (g *RaftGroup) RaftHandler() http.Handler {
-	return g.r.transport.Handler()
 }
 
 // Propose try to replicate a message to others by RaftGroup.
@@ -324,13 +296,6 @@ func (g *RaftGroup) start() {
 	g.stop = make(chan struct{})
 	g.stopping = make(chan struct{})
 	g.ctx, g.cancel = context.WithCancel(context.Background())
-
-	// http
-	g.httpstopc = make(chan struct{})
-	g.httpdonec = make(chan struct{})
-
-	// FIXME:raft http interface
-	go g.serveRaft()
 
 	go g.run()
 }
@@ -704,32 +669,4 @@ func (g *RaftGroup) goAttach(f func()) {
 		defer g.wg.Done()
 		f()
 	}()
-}
-
-// FIXME: for http testing
-func (g *RaftGroup) stopHttp() {
-	close(g.httpstopc)
-	<-g.httpdonec
-}
-
-func (g *RaftGroup) serveRaft() {
-	self := g.topology.MemberByID(g.topology.ID())
-
-	url, err := url.Parse(self.Addr)
-	if err != nil {
-		log.Fatalf("[RaftGroup] Failed parsing URL (%v)", err)
-	}
-
-	ln, err := newStoppableListener(url.Host, g.httpstopc)
-	if err != nil {
-		log.Fatalf("[RaftGroup] Failed to listen rafthttp (%v)", err)
-	}
-
-	err = (&http.Server{Handler: g.RaftHandler()}).Serve(ln)
-	select {
-	case <-g.httpstopc:
-	default:
-		log.Fatalf("[RaftGroup]: Failed to serve rafthttp (%v)", err)
-	}
-	close(g.httpdonec)
 }

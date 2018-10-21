@@ -12,25 +12,26 @@ import (
 
 func main() {
 	fmt.Println("raft group example go...")
-	cluster := flag.String("cluster", "1=http://127.0.0.1:9527,2=http://127.0.0.1:9528", "comma separated cluster peers")
 	id := flag.Int("id", 1, "node id")
+	gid := flag.Int("gid", 1, "group id")
+	cluster := flag.String("cluster", "1=127.0.0.1:9527,2=127.0.0.1:9528", "comma separated cluster peers")
+	grpc := flag.String("grpc-addr", "127.0.0.1:9527", "grpc server address")
 	port := flag.Int("port", 9021, "admin port")
 	join := flag.Bool("join", false, "join an existing cluster")
 	flag.Parse()
 
 	logger := zap.NewExample()
-	log.Printf("raft ready to start cluster: %s id: %d port: %d join: %t", *cluster, *id, *port, *join)
-	grp, err := raftgrp.NewRaftGroup(raftgrp.GroupConfig{
-		Logger:        logger,
-		ID:            uint64(*id),
-		Peers:         raftgrp.ParsePeers(strings.Split(*cluster, ",")),
-		DataDir:       "log",
-		TickMs:        1000,
-		ElectionTicks: 10,
-		PreVote:       false,
-	})
+	log.Printf("raft ready to start cluster: %s id: %d gid: %d admin-port: %d grpc-address: %s join: %t", *cluster, *id, *gid, *port, *grpc, *join)
+
+	// raft group manager initialize
+	mgr := raftgrp.NewRaftGroupManager(logger, *grpc)
+	if err := mgr.Start(); err != nil {
+		log.Fatalf("[main] start raft group manager error: %s", err)
+	}
+
+	grp, err := mgr.NewRaftGroup(logger, uint64(*gid), uint64(*id), strings.Split(*cluster, ","), "log")
 	if err != nil {
-		panic(err)
+		log.Fatalf("[main] new raft group error: %s", err)
 	}
 	grp.Start()
 	defer grp.Stop()

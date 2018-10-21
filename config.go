@@ -30,6 +30,7 @@ func (g GroupConfig) MemberDir() string {
 	return filepath.Join(g.DataDir, fmt.Sprintf("member-%d", g.ID))
 }
 
+// TODO: contact gid
 func (g GroupConfig) LogDir() string {
 	return filepath.Join(g.MemberDir(), "log")
 }

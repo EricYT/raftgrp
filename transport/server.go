@@ -22,7 +22,7 @@ type serverManager struct {
 }
 
 func (sm *serverManager) start() error {
-	lis, err := net.Listen("tpc", sm.Addr)
+	lis, err := net.Listen("tcp", sm.Addr)
 	if err != nil {
 		return errors.Wrapf(err, "[serverManager] listen addrss %s error", sm.Addr)
 	}
@@ -53,6 +53,7 @@ type raftServer struct {
 }
 
 func (rs *raftServer) Send(ctx context.Context, req *proto.SendRequest) (*proto.SendReply, error) {
+	reply := &proto.SendReply{}
 
 	gid := uint64(req.GroupId)
 	//msg := req.Msg
@@ -60,14 +61,17 @@ func (rs *raftServer) Send(ctx context.Context, req *proto.SendRequest) (*proto.
 	// unmarshal message
 	m := &raftpb.Message{}
 	if err := m.Unmarshal(req.Msg.Payload); err != nil {
-		return nil, err
+		reply.Ok = "unmarshal failed"
+		return reply, err
 	}
 
 	if err := rs.hnd.Process(ctx, gid, m); err != nil {
-		return nil, err
+		reply.Ok = "raft group process error"
+		return reply, err
 	}
 
-	return nil, nil
+	reply.Ok = "done"
+	return reply, nil
 }
 
 type snapshotServer struct {
