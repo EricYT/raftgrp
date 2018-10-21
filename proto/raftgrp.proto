@@ -1,0 +1,31 @@
+// version
+syntax = "proto3";
+
+package proto;
+
+
+// FIXME: import raftpb.Message, not marshal it again.
+// modify include path to solve this.
+//import "github.com/coreos/etcd/raft/raftpb/raft.proto";
+
+
+// The Raft Group service
+service RaftGrouper {
+  // Sends a raft message to peer
+  rpc Send (SendRequest) returns (SendReply) {}
+}
+
+// message
+message Message {
+  bytes payload = 1;
+}
+
+// FIXME: use stream to send this
+message SendRequest {
+  int64 group_id = 1;
+  repeated Message messages = 2;
+}
+
+message SendReply {
+  string ok = 1;
+}

@@ -1,12 +1,11 @@
 package raftgrp
 
 import (
-	"context"
 	"sync"
 
-	"github.com/coreos/etcd/etcdserver/api/rafthttp"
 	"github.com/coreos/etcd/etcdserver/api/snap"
 	"github.com/coreos/etcd/pkg/types"
+	"github.com/coreos/etcd/raft"
 	"github.com/coreos/etcd/raft/raftpb"
 	"go.uber.org/zap"
 )
@@ -43,6 +42,13 @@ func (t *transportV1) Start() error {
 }
 
 func (t *transportV1) Send(m []raftpb.Message) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, msg := range m {
+		if msg.To == raft.None {
+			continue
+		}
+	}
 }
 
 func (t *transportV1) SendSnapshot(m snap.Message) {
@@ -55,61 +61,30 @@ func (t *transportV1) AddPeer(id types.ID, urls []string) {
 		// alrady exist
 		return
 	}
+	t.peers[id] = peer{id: id, addr: urls[0]}
 }
 
 func (t *transportV1) RemovePeer(id types.ID) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.peers, id)
 }
 
 func (t *transportV1) RemoveAllPeers() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.peers = nil
 }
 
 func (t *transportV1) Stop() {
 }
 
-type peer interface {
-	start() error
+type Peer interface {
 	Send(m []raftpb.Message)
 	SendSnapshot(m snap.Message)
-	stop()
 }
 
-type Raft interface {
-	Process(ctx context.Context, m []raftpb.Message) error
-}
-
-type transportPeer struct {
-	ID   types.ID
-	urls []string
-
-	// for message callback
-	r Raft
-
-	mu     sync.Mutex
-	cancel context.CancelFunc
-	stopc  chan struct{}
-}
-
-// ETCD interface
-
-var _ rafthttp.Transporter = (*transport)(nil)
-
-type transport struct {
-	*rafthttp.Transport
-	r func([]raftpb.Message) ([]raftpb.Message, error)
-}
-
-func NewTransport(t *rafthttp.Transport, r func([]raftpb.Message) ([]raftpb.Message, error)) *transport {
-	return &transport{
-		Transport: t,
-		r:         r,
-	}
-}
-
-// Rendering payload
-func (t *transport) Send(ms []raftpb.Message) {
-	var err error
-	if ms, err = t.r(ms); err != nil {
-		t.Logger.Fatal("[transport] rendering messages error ", zap.Error(err))
-	}
-	t.Transport.Send(ms)
+type peer struct {
+	id   types.ID
+	addr string
 }
