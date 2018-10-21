@@ -13,8 +13,6 @@ import (
 )
 
 type Transport interface {
-	Start() error
-
 	// Send sends out the given message the remote peer.
 	// Each message has a To field, if the id is not exist
 	// in peers, ignore it.
@@ -26,8 +24,6 @@ type Transport interface {
 	AddPeer(id types.ID, urls []string)
 	RemovePeer(id types.ID)
 	RemoveAllPeers()
-
-	Stop()
 }
 
 var _ Transport = (*transportV1)(nil)
@@ -65,7 +61,6 @@ func (t *transportV1) Send(m []raftpb.Message) {
 				}
 
 				rc := c.RaftGrouperClient()
-
 				payload, err := msg.Marshal()
 				if err != nil {
 					return err

@@ -4,71 +4,64 @@ import (
 	"context"
 	"sync"
 
-	"github.com/EricYT/raftgrp/proto"
-	"github.com/pkg/errors"
 	"go.uber.org/zap"
-	grpc "google.golang.org/grpc"
 )
 
-type ClientConnManager interface {
-	// WithClient checks out a client by specific address,
-	// and executes a function with it, and check in it back to manager.
-	WithClient(addr string, f func(ctx context.Context, c *Client) error) error
-}
-
-type clientConnManager struct {
+type TransportManager struct {
 	Logger *zap.Logger
 
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu      sync.Mutex
-	clients map[string]*Client
+	mu sync.Mutex
 
-	stopc chan struct{}
+	// for client view
+	ccm *clientConnManager
+	// for server view
+	sm *serverManager
 }
 
-func (c *clientConnManager) WithClient(addr string, f func(ctx context.Context, c *Client) error) error {
-	c.mu.Lock()
-	client, ok := c.clients[addr]
-	if !ok {
-		var err error
-		client, err = newClient(addr)
-		if err != nil {
-			c.mu.Unlock()
-			return errors.Wrapf(err, "[ClientConnManager] new client with addr %s error", addr)
-		}
-		c.clients[addr] = client
+func NewTransportManager(lg *zap.Logger, addr string, hnd Handler) *TransportManager {
+	ccm := &clientConnManager{
+		Logger:  lg,
+		clients: make(map[string]*Client),
+		stopc:   make(chan struct{}),
 	}
-	c.mu.Unlock()
 
-	// FIXME: safe run or go attach ?
-	return f(c.ctx, client)
-}
-
-type Client struct {
-	addr string
-	conn *grpc.ClientConn
-	// stats
-}
-
-func newClient(addr string) (*Client, error) {
-	conn, err := grpc.Dial(addr, grpc.WithInsecure())
-	if err != nil {
-		return nil, err
+	sm := &serverManager{
+		Logger: lg,
+		Addr:   addr,
+		rs: &raftServer{
+			Logger: lg,
+			hnd:    hnd,
+		},
 	}
-	return &Client{
-		addr: addr,
-		conn: conn,
-	}, nil
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	ccm.ctx = ctx
+
+	return &TransportManager{
+		Logger: lg,
+		ctx:    ctx,
+		cancel: cancel,
+		ccm:    ccm,
+		sm:     sm,
+	}
 }
 
-func (c *Client) RaftGrouperClient() proto.RaftGrouperClient {
-	return proto.NewRaftGrouperClient(c.conn)
+func (tm *TransportManager) CreateTransport(lg *zap.Logger) Transport {
+	if lg == nil {
+		lg = tm.Logger
+	}
+	t := &transportV1{
+		Logger: lg,
+		mgr:    tm.ccm,
+	}
+	return t
 }
 
-// TODO: snapshot file sync service
-
-func (c *Client) close() {
-	c.conn.Close()
+func (tm *TransportManager) Start() error {
+	go tm.sm.start()
+	return nil
 }
