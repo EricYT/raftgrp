@@ -1,8 +1,10 @@
-package raftgrp
+package transport
 
 import (
+	"context"
 	"sync"
 
+	"github.com/EricYT/raftgrp/proto"
 	"github.com/coreos/etcd/etcdserver/api/snap"
 	"github.com/coreos/etcd/pkg/types"
 	"github.com/coreos/etcd/raft"
@@ -33,6 +35,8 @@ var _ Transport = (*transportV1)(nil)
 type transportV1 struct {
 	Logger *zap.Logger
 
+	mgr ClientConnManager
+
 	mu    sync.Mutex
 	peers map[types.ID]peer
 }
@@ -42,11 +46,52 @@ func (t *transportV1) Start() error {
 }
 
 func (t *transportV1) Send(m []raftpb.Message) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
 	for _, msg := range m {
 		if msg.To == raft.None {
 			continue
+		}
+		to := types.ID(msg.To)
+
+		t.mu.Lock()
+		peer, ok := t.peers[to]
+		t.mu.Unlock()
+
+		if ok {
+			if err := t.mgr.WithClient(peer.addr, func(ctx context.Context, c *Client) error {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+				}
+
+				rc := c.RaftGrouperClient()
+
+				payload, err := msg.Marshal()
+				if err != nil {
+					return err
+				}
+				message := &proto.SendRequest{
+					GroupId: 0x111,
+					Msg: &proto.Message{
+						Payload: payload,
+					},
+				}
+				reply, err := rc.Send(ctx, message)
+				if err != nil {
+					return err
+				}
+				t.Logger.Debug("[transportV1] send message success",
+					zap.Uint64("peer-id", uint64(to)),
+					zap.String("peer-addr", c.addr),
+					zap.Any("reply", reply),
+				)
+				return nil
+			}); err != nil {
+				t.Logger.Warn("[transportV1] send msg to peer erorr",
+					zap.Uint64("peer-id", uint64(to)),
+					zap.String("peer-addr", peer.addr),
+				)
+			}
 		}
 	}
 }

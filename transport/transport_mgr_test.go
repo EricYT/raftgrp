@@ -1,4 +1,4 @@
-package raftgrp
+package transport
 
 import "testing"
 

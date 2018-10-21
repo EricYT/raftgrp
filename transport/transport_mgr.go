@@ -1,4 +1,4 @@
-package raftgrp
+package transport
 
 import (
 	"context"
@@ -11,13 +11,9 @@ import (
 )
 
 type ClientConnManager interface {
-	Start() error
-
 	// WithClient checks out a client by specific address,
 	// and executes a function with it, and check in it back to manager.
 	WithClient(addr string, f func(ctx context.Context, c *Client) error) error
-
-	Stop()
 }
 
 type clientConnManager struct {
@@ -64,10 +60,10 @@ func newClient(addr string) (*Client, error) {
 	return &Client{
 		addr: addr,
 		conn: conn,
-	}
+	}, nil
 }
 
-func (c *Client) RaftGroupService() proto.RaftGrouperClient {
+func (c *Client) RaftGrouperClient() proto.RaftGrouperClient {
 	return proto.NewRaftGrouperClient(c.conn)
 }
 
