@@ -24,6 +24,8 @@ type clientConnManager struct {
 	mu      sync.Mutex
 	clients map[string]*Client
 
+	// FIXME: channel to dispatch jobs ?
+
 	stopc chan struct{}
 }
 
@@ -43,6 +45,15 @@ func (c *clientConnManager) WithClient(addr string, f func(ctx context.Context, 
 
 	// FIXME: safe run or go attach ?
 	return f(c.ctx, client)
+}
+
+func (c *clientConnManager) Stop() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, client := range c.clients {
+		client.close()
+	}
+	c.clients = nil
 }
 
 type Client struct {

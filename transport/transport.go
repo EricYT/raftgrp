@@ -33,7 +33,7 @@ type transportV1 struct {
 
 	mgr ClientConnManager
 
-	mu    sync.Mutex
+	mu    sync.RWMutex
 	peers map[types.ID]peer
 	gid   uint64
 }
@@ -49,9 +49,9 @@ func (t *transportV1) Send(m []raftpb.Message) {
 		}
 		to := types.ID(msg.To)
 
-		t.mu.Lock()
+		t.mu.RLock()
 		peer, ok := t.peers[to]
-		t.mu.Unlock()
+		t.mu.RUnlock()
 
 		if ok {
 			if err := t.mgr.WithClient(peer.addr, func(ctx context.Context, c *Client) error {
