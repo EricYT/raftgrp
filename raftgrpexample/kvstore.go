@@ -55,11 +55,10 @@ func (kv *kvstore) Start() (err error) {
 func (kv *kvstore) Lookup(key string) (val []byte, err error) {
 	kv.mu.Lock()
 	bid, ok := kv.kvStore[key]
+	kv.mu.Unlock()
 	if !ok {
-		kv.mu.Unlock()
 		return nil, ErrKvStoreNotFound
 	}
-	kv.mu.Unlock()
 	if val, err = kv.blobStore.Get(bid); err == nil {
 		return val, nil
 	}
