@@ -15,6 +15,7 @@ import (
 type GroupConfig struct {
 	*zap.Logger
 
+	GID   uint64
 	ID    uint64
 	Peers []*Peer
 

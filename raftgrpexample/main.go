@@ -24,12 +24,12 @@ func main() {
 	log.Printf("raft ready to start cluster: %s id: %d gid: %d admin-port: %d grpc-address: %s join: %t", *cluster, *id, *gid, *port, *grpc, *join)
 
 	// raft group manager initialize
-	mgr := raftgrp.NewRaftGroupManager(logger, *grpc)
+	mgr := raftgrp.NewRaftGroupManager(logger, fmt.Sprintf("log-%d", *id), *grpc)
 	if err := mgr.Start(); err != nil {
 		log.Fatalf("[main] start raft group manager error: %s", err)
 	}
 
-	grp, err := mgr.NewRaftGroup(logger, uint64(*gid), uint64(*id), strings.Split(*cluster, ","), "log")
+	grp, err := mgr.NewRaftGroup(logger, uint64(*gid), uint64(*id), strings.Split(*cluster, ","))
 	if err != nil {
 		log.Fatalf("[main] new raft group error: %s", err)
 	}

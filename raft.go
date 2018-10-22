@@ -7,9 +7,9 @@ import (
 
 	"github.com/EricYT/raftgrp/store"
 
-	"github.com/coreos/etcd/pkg/contention"
-	"github.com/coreos/etcd/raft"
-	"github.com/coreos/etcd/raft/raftpb"
+	"go.etcd.io/etcd/pkg/contention"
+	"go.etcd.io/etcd/raft"
+	"go.etcd.io/etcd/raft/raftpb"
 
 	"go.uber.org/zap"
 )

@@ -3,4 +3,5 @@ all:
 	go build .
 
 clean:
-	rm -fr log/*
+	rm -f ./raftgrpexample
+	rm -fr ./log-*

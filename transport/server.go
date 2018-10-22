@@ -5,7 +5,7 @@ import (
 	"net"
 
 	"github.com/EricYT/raftgrp/proto"
-	"github.com/coreos/etcd/raft/raftpb"
+	"go.etcd.io/etcd/raft/raftpb"
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	grpc "google.golang.org/grpc"
@@ -16,28 +16,32 @@ type serverManager struct {
 	Logger *zap.Logger
 
 	Addr string
+	s    *grpc.Server
 
 	rs *raftServer
 	ss *snapshotServer
 }
 
-func (sm *serverManager) start() error {
+func (sm *serverManager) Start() error {
 	lis, err := net.Listen("tcp", sm.Addr)
 	if err != nil {
 		return errors.Wrapf(err, "[serverManager] listen addrss %s error", sm.Addr)
 	}
-	// TODO: grpc server options
-	s := grpc.NewServer()
+	sm.s = grpc.NewServer()
 
 	// register service
-	proto.RegisterRaftGrouperServer(s, sm.rs)
+	proto.RegisterRaftGrouperServer(sm.s, sm.rs)
 
 	// blocking
-	if err := s.Serve(lis); err != nil {
+	if err := sm.s.Serve(lis); err != nil {
 		return errors.Wrap(err, "[serverManager] tcp serve error")
 	}
 
 	return nil
+}
+
+func (sm *serverManager) Stop() {
+	sm.s.Stop()
 }
 
 type Handler interface {

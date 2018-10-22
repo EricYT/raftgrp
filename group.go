@@ -9,12 +9,12 @@ import (
 	"time"
 
 	etransport "github.com/EricYT/raftgrp/transport"
-	"github.com/coreos/etcd/etcdserver/api/snap"
-	"github.com/coreos/etcd/pkg/fileutil"
-	"github.com/coreos/etcd/pkg/pbutil"
-	"github.com/coreos/etcd/pkg/types"
-	"github.com/coreos/etcd/raft"
-	"github.com/coreos/etcd/raft/raftpb"
+	"go.etcd.io/etcd/etcdserver/api/snap"
+	"go.etcd.io/etcd/pkg/fileutil"
+	"go.etcd.io/etcd/pkg/pbutil"
+	"go.etcd.io/etcd/pkg/types"
+	"go.etcd.io/etcd/raft"
+	"go.etcd.io/etcd/raft/raftpb"
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 
@@ -90,10 +90,6 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 		topology *RaftGroupTopology
 	)
 
-	if terr := fileutil.TouchDirAll(cfg.DataDir); terr != nil {
-		return nil, errors.Errorf("cannot access data directory: %v", terr)
-	}
-
 	// TODO: snapshot interfaces
 	if err = fileutil.TouchDirAll(cfg.SnapDir()); err != nil {
 		cfg.Logger.Fatal("failed to create snapshot directory",
@@ -105,6 +101,7 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 	if err != nil && err != snap.ErrNoSnapshot {
 		return nil, errors.Wrap(err, "new raft group error")
 	}
+	// end
 
 	id = cfg.ID
 	storageBackend, isNew := store.NewStorage(cfg.Logger, cfg.LogDir(), snapshot, ss)

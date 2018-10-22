@@ -2,35 +2,58 @@ package raftgrp
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
 	"sync"
 
 	etransport "github.com/EricYT/raftgrp/transport"
-	"github.com/coreos/etcd/raft/raftpb"
 	"github.com/pkg/errors"
+	"go.etcd.io/etcd/pkg/fileutil"
+	"go.etcd.io/etcd/raft/raftpb"
 	"go.uber.org/zap"
 )
 
 var (
 	ErrRaftGroupManagerNotFound error = errors.New("[RaftGroupManager] group not found")
 	ErrRaftGroupManagerExist    error = errors.New("[RaftGroupManager] group already exist")
+	ErrRaftGroupManagerLaunched error = errors.New("[RaftGroupManager] group already launched")
+)
+
+const (
+	defaultTickMs        uint   = 1000
+	defaultElectionTicks int    = 10
+	defaultSnapshotCount uint64 = 10000
 )
 
 type RaftGroupManager struct {
 	Logger *zap.Logger
 
-	mu     sync.Mutex
+	mu     sync.RWMutex
+	logdir string
+	// gRPC address for all raft groups
+	addr   string
 	groups map[uint64]*RaftGroup
 
 	tm *etransport.TransportManager
 }
 
-func NewRaftGroupManager(lg *zap.Logger, addr string) *RaftGroupManager {
+func NewRaftGroupManager(lg *zap.Logger, logdir, addr string) *RaftGroupManager {
 	if lg == nil {
 		lg = zap.NewExample()
 	}
 
+	// initialize raft group log directory
+	if terr := fileutil.TouchDirAll(logdir); terr != nil {
+		lg.Fatal("[RaftGroupManager] create raft group log directory error",
+			zap.String("directory", logdir),
+			zap.Error(terr),
+		)
+	}
+
 	rm := &RaftGroupManager{
 		Logger: lg,
+		logdir: logdir,
+		addr:   addr,
 		groups: make(map[uint64]*RaftGroup),
 	}
 	rm.tm = etransport.NewTransportManager(lg, addr, rm)
@@ -39,29 +62,30 @@ func NewRaftGroupManager(lg *zap.Logger, addr string) *RaftGroupManager {
 }
 
 func (rm *RaftGroupManager) Start() error {
+	// FIXME: If we try to reload all raft groups from here.
+	// It's a heavy operation maybe.
+
 	rm.tm.Start()
 	return nil
 }
 
 func (rm *RaftGroupManager) Stop() {
+	rm.tm.Stop()
 }
 
 // raft process dispatcher
 func (rm *RaftGroupManager) Process(ctx context.Context, gid uint64, m *raftpb.Message) error {
-	rm.mu.Lock()
+	// FIXME: this operation will be bothered by raft group create and restart.
+	rm.mu.RLock()
 	g, ok := rm.groups[gid]
-	rm.mu.Unlock()
+	rm.mu.RUnlock()
 	if ok {
 		return g.ProcessExtra(ctx, m)
 	}
 	return ErrRaftGroupManagerNotFound
 }
 
-func (rm *RaftGroupManager) CreateTransport(gid uint64) etransport.Transport {
-	return rm.tm.CreateTransport(rm.Logger, gid)
-}
-
-func (rm *RaftGroupManager) NewRaftGroup(lg *zap.Logger, gid, id uint64, peers []string, datadir string) (*RaftGroup, error) {
+func (rm *RaftGroupManager) NewRaftGroup(lg *zap.Logger, gid, id uint64, peers []string) (*RaftGroup, error) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	if g, ok := rm.groups[gid]; ok {
@@ -72,21 +96,77 @@ func (rm *RaftGroupManager) NewRaftGroup(lg *zap.Logger, gid, id uint64, peers [
 		lg = rm.Logger
 	}
 
+	// initialize raft group log parent directory
+	gdir := logDirByGId(rm.logdir, gid)
+	if terr := fileutil.CreateDirAll(gdir); terr != nil {
+		lg.Error("[RaftGroupManager] create raft group parent directory failed",
+			zap.Uint64("gid", gid),
+			zap.Uint64("id", id),
+			zap.String("raft-group-parent-directory", gdir),
+			zap.Error(terr),
+		)
+		return nil, errors.Wrap(terr, "[RaftGroupManager] create raft group parent directory error")
+	}
+
+	trans := rm.tm.CreateTransport(lg, gid)
 	grp, err := NewRaftGroup(GroupConfig{
 		Logger:        lg,
 		ID:            id,
 		Peers:         ParsePeers(peers),
-		DataDir:       datadir,
-		TickMs:        1000,
-		ElectionTicks: 10,
+		DataDir:       gdir,
+		TickMs:        defaultTickMs,
+		ElectionTicks: defaultElectionTicks,
 		PreVote:       false,
-		SnapshotCount: 100000,
-	}, rm.CreateTransport(gid))
+		SnapshotCount: defaultSnapshotCount,
+	}, trans)
 	if err != nil {
+		lg.Error("[RaftGroupManager] create raft group failed",
+			zap.Uint64("gid", gid),
+			zap.Uint64("id", id),
+			zap.Error(err),
+		)
 		return nil, errors.Wrap(err, "[RaftGroupManager] new raft group error")
 	}
 
 	rm.groups[gid] = grp
-
 	return grp, nil
+}
+
+func (rm *RaftGroupManager) RestartRaftGroup(lg *zap.Logger, gid, id uint64) (*RaftGroup, error) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	if g, ok := rm.groups[gid]; ok {
+		lg.Error("[RaftGroupManager] restart raft group already launched",
+			zap.Uint64("raft-group-id", gid),
+			zap.Uint64("id", id),
+			zap.Error(ErrRaftGroupManagerLaunched),
+		)
+		return g, ErrRaftGroupManagerLaunched
+	}
+
+	trans := rm.tm.CreateTransport(lg, gid)
+	grp, err := NewRaftGroup(GroupConfig{
+		Logger:        lg,
+		ID:            id,
+		DataDir:       logDirByGId(rm.logdir, gid),
+		TickMs:        defaultTickMs,
+		ElectionTicks: defaultElectionTicks,
+		PreVote:       false,
+		SnapshotCount: defaultSnapshotCount,
+	}, trans)
+	if err != nil {
+		lg.Error("[RaftGroupManager] restart raft group failed",
+			zap.Uint64("gid", gid),
+			zap.Uint64("id", id),
+			zap.Error(err),
+		)
+		return nil, errors.Wrap(err, "[RaftGroupManager] restart raft group error")
+	}
+
+	rm.groups[gid] = grp
+	return grp, nil
+}
+
+func logDirByGId(parent string, gid uint64) string {
+	return filepath.Join(parent, fmt.Sprintf("raft-group-%d", gid))
 }

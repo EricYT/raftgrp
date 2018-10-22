@@ -1,7 +1,7 @@
 package raftgrp
 
 import (
-	pb "github.com/coreos/etcd/raft/raftpb"
+	pb "go.etcd.io/etcd/raft/raftpb"
 )
 
 // Storage is an interface that may be implemented by the application

@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/coreos/etcd/pkg/types"
+	"go.etcd.io/etcd/pkg/types"
 	"go.uber.org/zap"
 )
 
@@ -65,6 +65,11 @@ func (tm *TransportManager) CreateTransport(lg *zap.Logger, gid uint64) Transpor
 }
 
 func (tm *TransportManager) Start() error {
-	go tm.sm.start()
+	go tm.sm.Start()
 	return nil
+}
+
+func (tm *TransportManager) Stop() {
+	tm.sm.Stop()
+	tm.ccm.Stop()
 }
