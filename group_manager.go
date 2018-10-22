@@ -80,7 +80,7 @@ func (rm *RaftGroupManager) Process(ctx context.Context, gid uint64, m *raftpb.M
 	g, ok := rm.groups[gid]
 	rm.mu.RUnlock()
 	if ok {
-		return g.ProcessExtra(ctx, m)
+		return g.Process(ctx, m)
 	}
 	return ErrRaftGroupManagerNotFound
 }

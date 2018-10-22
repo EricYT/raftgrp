@@ -13,6 +13,10 @@ import (
 	grpc "google.golang.org/grpc"
 )
 
+var (
+	ErrTransportUnknowMessageType error = errors.New("[transport] unknow message type")
+)
+
 // rpc server manager
 type serverManager struct {
 	Logger *zap.Logger
@@ -67,10 +71,15 @@ func (rs *raftServer) Send(stream proto.RaftGrouper_SendServer) error {
 		err error
 	)
 
-	reply := &proto.SendReply{Ok: "done"}
+	reply := &proto.SendReply{
+		Ack: &proto.ACK{
+			Code: 0,
+		},
+	}
 	defer func() {
 		if err != nil {
-			reply.Ok = err.Error()
+			reply.Ack.Code = 500
+			reply.Ack.Detail = err.Error()
 		}
 		stream.SendAndClose(reply)
 	}()
@@ -85,9 +94,15 @@ readloop:
 			}
 			return err
 		}
-		// TODO: split metadata and payload
-		gid = uint64(req.GetGroupId())
-		payload.Write(req.GetMsg().GetPayload())
+
+		switch req.Msg.(type) {
+		case *proto.SendRequest_Meta:
+			gid = uint64(req.GetMeta().GetGroupId())
+		case *proto.SendRequest_Payload:
+			payload.Write(req.GetPayload().GetData())
+		default:
+			return ErrTransportUnknowMessageType
+		}
 	}
 
 	// unmarshal raft message

@@ -106,7 +106,7 @@ func (t *transportV1) sendMessageToPeer(ctx context.Context, c *Client, msg *raf
 		)
 		return err
 	}
-	buf := bytes.NewBuffer(payload)
+	payloadBuf := bytes.NewReader(payload)
 
 	rc, err := c.RaftGrouperClient().Send(ctx, grpc.EmptyCallOption{})
 	if err != nil {
@@ -116,25 +116,44 @@ func (t *transportV1) sendMessageToPeer(ctx context.Context, c *Client, msg *raf
 		return err
 	}
 
-	// TODO: send message 1m per slice
+	// send message matadata firstly
+	meta := &proto.SendRequest{
+		Msg: &proto.SendRequest_Meta{
+			Meta: &proto.Metadata{
+				GroupId: int64(t.gid),
+			},
+		},
+	}
+	if err := rc.Send(meta); err != nil {
+		t.Logger.Warn("[transportV1] send metadata failed",
+			zap.Any("metadata", meta),
+			zap.Error(err),
+		)
+		rc.CloseSend()
+		return err
+	}
+
+	// TODO: send message payload 1m per slice
 	var (
 		n    int
 		rerr error
 	)
-	slice := make([]byte, 1*1024)
-
+	// FIXME: 1Kb => 512Kb
+	buf := make([]byte, 1*1024)
 	for rerr == nil {
-		n, rerr = buf.Read(slice)
+		n, rerr = payloadBuf.Read(buf)
 		message := &proto.SendRequest{
-			GroupId: int64(t.gid),
-			Msg: &proto.Message{
-				Payload: slice[:n],
+			Msg: &proto.SendRequest_Payload{
+				Payload: &proto.Playload{
+					Data: buf[:n],
+				},
 			},
 		}
 		if err := rc.Send(message); err != nil {
 			t.Logger.Warn("[transportV1] send message error",
 				zap.Error(err),
 			)
+			rc.CloseSend()
 			return err
 		}
 	}
@@ -142,13 +161,14 @@ func (t *transportV1) sendMessageToPeer(ctx context.Context, c *Client, msg *raf
 	reply, err := rc.CloseAndRecv()
 	if err != nil {
 		t.Logger.Warn("[transportV1] close and recv failed",
+			zap.Uint64("gid", t.gid),
 			zap.Error(err),
 		)
 		return err
 	}
-	if reply.Ok != "done" {
+	if reply.Ack.Code != 0 {
 		t.Logger.Debug("[transportV1] send message failed",
-			zap.String("ok", reply.Ok),
+			zap.Int64("code", reply.Ack.Code),
 			zap.Any("reply", reply),
 		)
 	}

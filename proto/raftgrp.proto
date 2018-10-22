@@ -16,16 +16,27 @@ service RaftGrouper {
 }
 
 // message
-message Message {
-  bytes payload = 1;
+message Metadata {
+  int64 group_id = 1;
+}
+
+message Playload {
+  bytes data = 1;
 }
 
 // FIXME: use stream to send this
 message SendRequest {
-  int64 group_id = 1;
-  Message msg = 2;
+  oneof msg {
+    Metadata meta    = 1;
+    Playload payload = 2;
+  }
+}
+
+message ACK {
+  int64  code   = 1;
+  string detail = 2;
 }
 
 message SendReply {
-  string ok = 1;
+  ACK ack = 1;
 }

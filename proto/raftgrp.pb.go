@@ -24,58 +24,98 @@ var _ = math.Inf
 const _ = proto.ProtoPackageIsVersion2 // please upgrade the proto package
 
 // message
-type Message struct {
-	Payload              []byte   `protobuf:"bytes,1,opt,name=payload,proto3" json:"payload,omitempty"`
+type Metadata struct {
+	GroupId              int64    `protobuf:"varint,1,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
 }
 
-func (m *Message) Reset()         { *m = Message{} }
-func (m *Message) String() string { return proto.CompactTextString(m) }
-func (*Message) ProtoMessage()    {}
-func (*Message) Descriptor() ([]byte, []int) {
-	return fileDescriptor_raftgrp_c20e52a28669b8c0, []int{0}
+func (m *Metadata) Reset()         { *m = Metadata{} }
+func (m *Metadata) String() string { return proto.CompactTextString(m) }
+func (*Metadata) ProtoMessage()    {}
+func (*Metadata) Descriptor() ([]byte, []int) {
+	return fileDescriptor_raftgrp_d69fbdcb40c2f628, []int{0}
 }
-func (m *Message) XXX_Unmarshal(b []byte) error {
-	return xxx_messageInfo_Message.Unmarshal(m, b)
+func (m *Metadata) XXX_Unmarshal(b []byte) error {
+	return xxx_messageInfo_Metadata.Unmarshal(m, b)
 }
-func (m *Message) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	return xxx_messageInfo_Message.Marshal(b, m, deterministic)
+func (m *Metadata) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	return xxx_messageInfo_Metadata.Marshal(b, m, deterministic)
 }
-func (dst *Message) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_Message.Merge(dst, src)
+func (dst *Metadata) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_Metadata.Merge(dst, src)
 }
-func (m *Message) XXX_Size() int {
-	return xxx_messageInfo_Message.Size(m)
+func (m *Metadata) XXX_Size() int {
+	return xxx_messageInfo_Metadata.Size(m)
 }
-func (m *Message) XXX_DiscardUnknown() {
-	xxx_messageInfo_Message.DiscardUnknown(m)
+func (m *Metadata) XXX_DiscardUnknown() {
+	xxx_messageInfo_Metadata.DiscardUnknown(m)
 }
 
-var xxx_messageInfo_Message proto.InternalMessageInfo
+var xxx_messageInfo_Metadata proto.InternalMessageInfo
 
-func (m *Message) GetPayload() []byte {
+func (m *Metadata) GetGroupId() int64 {
 	if m != nil {
-		return m.Payload
+		return m.GroupId
+	}
+	return 0
+}
+
+type Playload struct {
+	Data                 []byte   `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *Playload) Reset()         { *m = Playload{} }
+func (m *Playload) String() string { return proto.CompactTextString(m) }
+func (*Playload) ProtoMessage()    {}
+func (*Playload) Descriptor() ([]byte, []int) {
+	return fileDescriptor_raftgrp_d69fbdcb40c2f628, []int{1}
+}
+func (m *Playload) XXX_Unmarshal(b []byte) error {
+	return xxx_messageInfo_Playload.Unmarshal(m, b)
+}
+func (m *Playload) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	return xxx_messageInfo_Playload.Marshal(b, m, deterministic)
+}
+func (dst *Playload) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_Playload.Merge(dst, src)
+}
+func (m *Playload) XXX_Size() int {
+	return xxx_messageInfo_Playload.Size(m)
+}
+func (m *Playload) XXX_DiscardUnknown() {
+	xxx_messageInfo_Playload.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_Playload proto.InternalMessageInfo
+
+func (m *Playload) GetData() []byte {
+	if m != nil {
+		return m.Data
 	}
 	return nil
 }
 
 // FIXME: use stream to send this
 type SendRequest struct {
-	GroupId              int64    `protobuf:"varint,1,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
-	Msg                  *Message `protobuf:"bytes,2,opt,name=msg,proto3" json:"msg,omitempty"`
-	XXX_NoUnkeyedLiteral struct{} `json:"-"`
-	XXX_unrecognized     []byte   `json:"-"`
-	XXX_sizecache        int32    `json:"-"`
+	// Types that are valid to be assigned to Msg:
+	//	*SendRequest_Meta
+	//	*SendRequest_Payload
+	Msg                  isSendRequest_Msg `protobuf_oneof:"msg"`
+	XXX_NoUnkeyedLiteral struct{}          `json:"-"`
+	XXX_unrecognized     []byte            `json:"-"`
+	XXX_sizecache        int32             `json:"-"`
 }
 
 func (m *SendRequest) Reset()         { *m = SendRequest{} }
 func (m *SendRequest) String() string { return proto.CompactTextString(m) }
 func (*SendRequest) ProtoMessage()    {}
 func (*SendRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_raftgrp_c20e52a28669b8c0, []int{1}
+	return fileDescriptor_raftgrp_d69fbdcb40c2f628, []int{2}
 }
 func (m *SendRequest) XXX_Unmarshal(b []byte) error {
 	return xxx_messageInfo_SendRequest.Unmarshal(m, b)
@@ -95,22 +135,163 @@ func (m *SendRequest) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_SendRequest proto.InternalMessageInfo
 
-func (m *SendRequest) GetGroupId() int64 {
-	if m != nil {
-		return m.GroupId
-	}
-	return 0
+type isSendRequest_Msg interface {
+	isSendRequest_Msg()
 }
 
-func (m *SendRequest) GetMsg() *Message {
+type SendRequest_Meta struct {
+	Meta *Metadata `protobuf:"bytes,1,opt,name=meta,proto3,oneof"`
+}
+type SendRequest_Payload struct {
+	Payload *Playload `protobuf:"bytes,2,opt,name=payload,proto3,oneof"`
+}
+
+func (*SendRequest_Meta) isSendRequest_Msg()    {}
+func (*SendRequest_Payload) isSendRequest_Msg() {}
+
+func (m *SendRequest) GetMsg() isSendRequest_Msg {
 	if m != nil {
 		return m.Msg
 	}
 	return nil
 }
 
+func (m *SendRequest) GetMeta() *Metadata {
+	if x, ok := m.GetMsg().(*SendRequest_Meta); ok {
+		return x.Meta
+	}
+	return nil
+}
+
+func (m *SendRequest) GetPayload() *Playload {
+	if x, ok := m.GetMsg().(*SendRequest_Payload); ok {
+		return x.Payload
+	}
+	return nil
+}
+
+// XXX_OneofFuncs is for the internal use of the proto package.
+func (*SendRequest) XXX_OneofFuncs() (func(msg proto.Message, b *proto.Buffer) error, func(msg proto.Message, tag, wire int, b *proto.Buffer) (bool, error), func(msg proto.Message) (n int), []interface{}) {
+	return _SendRequest_OneofMarshaler, _SendRequest_OneofUnmarshaler, _SendRequest_OneofSizer, []interface{}{
+		(*SendRequest_Meta)(nil),
+		(*SendRequest_Payload)(nil),
+	}
+}
+
+func _SendRequest_OneofMarshaler(msg proto.Message, b *proto.Buffer) error {
+	m := msg.(*SendRequest)
+	// msg
+	switch x := m.Msg.(type) {
+	case *SendRequest_Meta:
+		b.EncodeVarint(1<<3 | proto.WireBytes)
+		if err := b.EncodeMessage(x.Meta); err != nil {
+			return err
+		}
+	case *SendRequest_Payload:
+		b.EncodeVarint(2<<3 | proto.WireBytes)
+		if err := b.EncodeMessage(x.Payload); err != nil {
+			return err
+		}
+	case nil:
+	default:
+		return fmt.Errorf("SendRequest.Msg has unexpected type %T", x)
+	}
+	return nil
+}
+
+func _SendRequest_OneofUnmarshaler(msg proto.Message, tag, wire int, b *proto.Buffer) (bool, error) {
+	m := msg.(*SendRequest)
+	switch tag {
+	case 1: // msg.meta
+		if wire != proto.WireBytes {
+			return true, proto.ErrInternalBadWireType
+		}
+		msg := new(Metadata)
+		err := b.DecodeMessage(msg)
+		m.Msg = &SendRequest_Meta{msg}
+		return true, err
+	case 2: // msg.payload
+		if wire != proto.WireBytes {
+			return true, proto.ErrInternalBadWireType
+		}
+		msg := new(Playload)
+		err := b.DecodeMessage(msg)
+		m.Msg = &SendRequest_Payload{msg}
+		return true, err
+	default:
+		return false, nil
+	}
+}
+
+func _SendRequest_OneofSizer(msg proto.Message) (n int) {
+	m := msg.(*SendRequest)
+	// msg
+	switch x := m.Msg.(type) {
+	case *SendRequest_Meta:
+		s := proto.Size(x.Meta)
+		n += 1 // tag and wire
+		n += proto.SizeVarint(uint64(s))
+		n += s
+	case *SendRequest_Payload:
+		s := proto.Size(x.Payload)
+		n += 1 // tag and wire
+		n += proto.SizeVarint(uint64(s))
+		n += s
+	case nil:
+	default:
+		panic(fmt.Sprintf("proto: unexpected type %T in oneof", x))
+	}
+	return n
+}
+
+type ACK struct {
+	Code                 int64    `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"`
+	Detail               string   `protobuf:"bytes,2,opt,name=detail,proto3" json:"detail,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *ACK) Reset()         { *m = ACK{} }
+func (m *ACK) String() string { return proto.CompactTextString(m) }
+func (*ACK) ProtoMessage()    {}
+func (*ACK) Descriptor() ([]byte, []int) {
+	return fileDescriptor_raftgrp_d69fbdcb40c2f628, []int{3}
+}
+func (m *ACK) XXX_Unmarshal(b []byte) error {
+	return xxx_messageInfo_ACK.Unmarshal(m, b)
+}
+func (m *ACK) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	return xxx_messageInfo_ACK.Marshal(b, m, deterministic)
+}
+func (dst *ACK) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_ACK.Merge(dst, src)
+}
+func (m *ACK) XXX_Size() int {
+	return xxx_messageInfo_ACK.Size(m)
+}
+func (m *ACK) XXX_DiscardUnknown() {
+	xxx_messageInfo_ACK.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_ACK proto.InternalMessageInfo
+
+func (m *ACK) GetCode() int64 {
+	if m != nil {
+		return m.Code
+	}
+	return 0
+}
+
+func (m *ACK) GetDetail() string {
+	if m != nil {
+		return m.Detail
+	}
+	return ""
+}
+
 type SendReply struct {
-	Ok                   string   `protobuf:"bytes,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	Ack                  *ACK     `protobuf:"bytes,1,opt,name=ack,proto3" json:"ack,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -120,7 +301,7 @@ func (m *SendReply) Reset()         { *m = SendReply{} }
 func (m *SendReply) String() string { return proto.CompactTextString(m) }
 func (*SendReply) ProtoMessage()    {}
 func (*SendReply) Descriptor() ([]byte, []int) {
-	return fileDescriptor_raftgrp_c20e52a28669b8c0, []int{2}
+	return fileDescriptor_raftgrp_d69fbdcb40c2f628, []int{4}
 }
 func (m *SendReply) XXX_Unmarshal(b []byte) error {
 	return xxx_messageInfo_SendReply.Unmarshal(m, b)
@@ -140,16 +321,18 @@ func (m *SendReply) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_SendReply proto.InternalMessageInfo
 
-func (m *SendReply) GetOk() string {
+func (m *SendReply) GetAck() *ACK {
 	if m != nil {
-		return m.Ok
+		return m.Ack
 	}
-	return ""
+	return nil
 }
 
 func init() {
-	proto.RegisterType((*Message)(nil), "proto.Message")
+	proto.RegisterType((*Metadata)(nil), "proto.Metadata")
+	proto.RegisterType((*Playload)(nil), "proto.Playload")
 	proto.RegisterType((*SendRequest)(nil), "proto.SendRequest")
+	proto.RegisterType((*ACK)(nil), "proto.ACK")
 	proto.RegisterType((*SendReply)(nil), "proto.SendReply")
 }
 
@@ -261,21 +444,25 @@ var _RaftGrouper_serviceDesc = grpc.ServiceDesc{
 	Metadata: "raftgrp.proto",
 }
 
-func init() { proto.RegisterFile("raftgrp.proto", fileDescriptor_raftgrp_c20e52a28669b8c0) }
+func init() { proto.RegisterFile("raftgrp.proto", fileDescriptor_raftgrp_d69fbdcb40c2f628) }
 
-var fileDescriptor_raftgrp_c20e52a28669b8c0 = []byte{
-	// 195 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xe2, 0xe2, 0x2d, 0x4a, 0x4c, 0x2b,
-	0x49, 0x2f, 0x2a, 0xd0, 0x2b, 0x28, 0xca, 0x2f, 0xc9, 0x17, 0x62, 0x05, 0x53, 0x4a, 0xca, 0x5c,
-	0xec, 0xbe, 0xa9, 0xc5, 0xc5, 0x89, 0xe9, 0xa9, 0x42, 0x12, 0x5c, 0xec, 0x05, 0x89, 0x95, 0x39,
-	0xf9, 0x89, 0x29, 0x12, 0x8c, 0x0a, 0x8c, 0x1a, 0x3c, 0x41, 0x30, 0xae, 0x92, 0x17, 0x17, 0x77,
-	0x70, 0x6a, 0x5e, 0x4a, 0x50, 0x6a, 0x61, 0x69, 0x6a, 0x71, 0x89, 0x90, 0x24, 0x17, 0x47, 0x7a,
-	0x51, 0x7e, 0x69, 0x41, 0x7c, 0x26, 0x44, 0x25, 0x73, 0x10, 0x3b, 0x98, 0xef, 0x99, 0x22, 0xa4,
-	0xc0, 0xc5, 0x9c, 0x5b, 0x9c, 0x2e, 0xc1, 0xa4, 0xc0, 0xa8, 0xc1, 0x6d, 0xc4, 0x07, 0xb1, 0x4a,
-	0x0f, 0x6a, 0x41, 0x10, 0x48, 0x4a, 0x49, 0x9a, 0x8b, 0x13, 0x62, 0x56, 0x41, 0x4e, 0xa5, 0x10,
-	0x1f, 0x17, 0x53, 0x7e, 0x36, 0xd8, 0x0c, 0xce, 0x20, 0xa6, 0xfc, 0x6c, 0x23, 0x7b, 0x2e, 0xee,
-	0xa0, 0xc4, 0xb4, 0x12, 0x77, 0x90, 0x69, 0xa9, 0x45, 0x42, 0x06, 0x5c, 0x2c, 0x20, 0xb5, 0x42,
-	0x42, 0x50, 0x83, 0x90, 0x1c, 0x21, 0x25, 0x80, 0x22, 0x56, 0x90, 0x53, 0xa9, 0xc4, 0xa0, 0xc1,
-	0x98, 0xc4, 0x06, 0x16, 0x34, 0x06, 0x04, 0x00, 0x00, 0xff, 0xff, 0xb7, 0xc3, 0x27, 0xfe, 0xed,
-	0x00, 0x00, 0x00,
+var fileDescriptor_raftgrp_d69fbdcb40c2f628 = []byte{
+	// 259 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x54, 0x8f, 0xc1, 0x4a, 0x03, 0x31,
+	0x10, 0x86, 0x77, 0xdd, 0x6d, 0xbb, 0x9d, 0x55, 0x94, 0x39, 0x48, 0x15, 0x11, 0x09, 0x14, 0x2a,
+	0x42, 0xd1, 0xfa, 0x00, 0x52, 0x7b, 0xb0, 0x52, 0x04, 0x89, 0x0f, 0x20, 0x63, 0x93, 0xae, 0xc5,
+	0xd4, 0xc4, 0x34, 0x3d, 0xec, 0xdb, 0x4b, 0xb2, 0x59, 0x68, 0x4f, 0x99, 0xf9, 0xf3, 0xcd, 0xfc,
+	0xff, 0xc0, 0x89, 0xa5, 0x95, 0xab, 0xac, 0x19, 0x1b, 0xab, 0x9d, 0xc6, 0x4e, 0x78, 0xd8, 0x10,
+	0x8a, 0x37, 0xe9, 0x48, 0x90, 0x23, 0xbc, 0x80, 0xa2, 0xb2, 0x7a, 0x67, 0x3e, 0xd7, 0x62, 0x90,
+	0xde, 0xa4, 0xa3, 0x8c, 0xf7, 0x42, 0xff, 0x2a, 0xd8, 0x35, 0x14, 0xef, 0x8a, 0x6a, 0xa5, 0x49,
+	0x20, 0x42, 0xee, 0xf1, 0x80, 0x1c, 0xf3, 0x50, 0xb3, 0x6f, 0x28, 0x3f, 0xe4, 0xaf, 0xe0, 0xf2,
+	0x6f, 0x27, 0xb7, 0x0e, 0x87, 0x90, 0x6f, 0x64, 0x44, 0xca, 0xc9, 0x69, 0x63, 0x39, 0x6e, 0x8d,
+	0xe6, 0x09, 0x0f, 0xdf, 0x78, 0x07, 0x3d, 0xd3, 0x2c, 0x1d, 0x1c, 0x1d, 0x90, 0xad, 0xd7, 0x3c,
+	0xe1, 0x2d, 0xf1, 0xdc, 0x81, 0x6c, 0xb3, 0xad, 0xd8, 0x03, 0x64, 0xd3, 0xd9, 0xc2, 0x87, 0x58,
+	0x6a, 0x21, 0x63, 0xce, 0x50, 0xe3, 0x39, 0x74, 0x85, 0x74, 0xb4, 0x56, 0x61, 0x5b, 0x9f, 0xc7,
+	0x8e, 0xdd, 0x42, 0xbf, 0x09, 0x67, 0x54, 0x8d, 0x57, 0x90, 0xd1, 0xf2, 0x27, 0x26, 0x83, 0xe8,
+	0x37, 0x9d, 0x2d, 0xb8, 0x97, 0x27, 0x4f, 0x50, 0x72, 0x5a, 0xb9, 0x17, 0x7f, 0xb6, 0xb4, 0x78,
+	0x0f, 0xb9, 0x9f, 0x44, 0x8c, 0xdc, 0xde, 0x8d, 0x97, 0x67, 0x07, 0x9a, 0x51, 0x35, 0x4b, 0x46,
+	0xe9, 0x57, 0x37, 0x88, 0x8f, 0xff, 0x01, 0x00, 0x00, 0xff, 0xff, 0x89, 0x1a, 0x14, 0x73, 0x6e,
+	0x01, 0x00, 0x00,
 }

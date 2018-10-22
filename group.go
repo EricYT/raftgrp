@@ -167,7 +167,7 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 			t.AddPeer(m.ID, []string{m.Addr})
 		}
 	}
-	trs := NewTransport(t, grp.renderingMessage)
+	trs := NewTransport(t, grp.renderMessage)
 	grp.r.transport = trs
 
 	return grp, nil
@@ -226,7 +226,7 @@ func (g *RaftGroup) RemovePeer(ctx context.Context, id uint64) error {
 }
 
 // rendering message
-func (g *RaftGroup) renderingMessage(ms []raftpb.Message) ([]raftpb.Message, error) {
+func (g *RaftGroup) renderMessage(ms []raftpb.Message) ([]raftpb.Message, error) {
 	//FIXME: rewrite message before we send it
 	lg := g.getLogger()
 	for i := range ms {
@@ -258,7 +258,7 @@ func (g *RaftGroup) renderingMessage(ms []raftpb.Message) ([]raftpb.Message, err
 }
 
 // Process takes a raft message and applies it to the server's raft state.
-func (g *RaftGroup) ProcessExtra(ctx context.Context, m *raftpb.Message) error {
+func (g *RaftGroup) Process(ctx context.Context, m *raftpb.Message) error {
 	// FIXME: m.From is removed
 
 	lg := g.getLogger()
