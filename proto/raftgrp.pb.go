@@ -35,7 +35,7 @@ func (m *Message) Reset()         { *m = Message{} }
 func (m *Message) String() string { return proto.CompactTextString(m) }
 func (*Message) ProtoMessage()    {}
 func (*Message) Descriptor() ([]byte, []int) {
-	return fileDescriptor_raftgrp_fb139697c0c7a93b, []int{0}
+	return fileDescriptor_raftgrp_c20e52a28669b8c0, []int{0}
 }
 func (m *Message) XXX_Unmarshal(b []byte) error {
 	return xxx_messageInfo_Message.Unmarshal(m, b)
@@ -75,7 +75,7 @@ func (m *SendRequest) Reset()         { *m = SendRequest{} }
 func (m *SendRequest) String() string { return proto.CompactTextString(m) }
 func (*SendRequest) ProtoMessage()    {}
 func (*SendRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_raftgrp_fb139697c0c7a93b, []int{1}
+	return fileDescriptor_raftgrp_c20e52a28669b8c0, []int{1}
 }
 func (m *SendRequest) XXX_Unmarshal(b []byte) error {
 	return xxx_messageInfo_SendRequest.Unmarshal(m, b)
@@ -120,7 +120,7 @@ func (m *SendReply) Reset()         { *m = SendReply{} }
 func (m *SendReply) String() string { return proto.CompactTextString(m) }
 func (*SendReply) ProtoMessage()    {}
 func (*SendReply) Descriptor() ([]byte, []int) {
-	return fileDescriptor_raftgrp_fb139697c0c7a93b, []int{2}
+	return fileDescriptor_raftgrp_c20e52a28669b8c0, []int{2}
 }
 func (m *SendReply) XXX_Unmarshal(b []byte) error {
 	return xxx_messageInfo_SendReply.Unmarshal(m, b)
@@ -166,7 +166,7 @@ const _ = grpc.SupportPackageIsVersion4
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://godoc.org/google.golang.org/grpc#ClientConn.NewStream.
 type RaftGrouperClient interface {
 	// Sends a raft message to peer
-	Send(ctx context.Context, in *SendRequest, opts ...grpc.CallOption) (*SendReply, error)
+	Send(ctx context.Context, opts ...grpc.CallOption) (RaftGrouper_SendClient, error)
 }
 
 type raftGrouperClient struct {
@@ -177,60 +177,94 @@ func NewRaftGrouperClient(cc *grpc.ClientConn) RaftGrouperClient {
 	return &raftGrouperClient{cc}
 }
 
-func (c *raftGrouperClient) Send(ctx context.Context, in *SendRequest, opts ...grpc.CallOption) (*SendReply, error) {
-	out := new(SendReply)
-	err := c.cc.Invoke(ctx, "/proto.RaftGrouper/Send", in, out, opts...)
+func (c *raftGrouperClient) Send(ctx context.Context, opts ...grpc.CallOption) (RaftGrouper_SendClient, error) {
+	stream, err := c.cc.NewStream(ctx, &_RaftGrouper_serviceDesc.Streams[0], "/proto.RaftGrouper/Send", opts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &raftGrouperSendClient{stream}
+	return x, nil
+}
+
+type RaftGrouper_SendClient interface {
+	Send(*SendRequest) error
+	CloseAndRecv() (*SendReply, error)
+	grpc.ClientStream
+}
+
+type raftGrouperSendClient struct {
+	grpc.ClientStream
+}
+
+func (x *raftGrouperSendClient) Send(m *SendRequest) error {
+	return x.ClientStream.SendMsg(m)
+}
+
+func (x *raftGrouperSendClient) CloseAndRecv() (*SendReply, error) {
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	m := new(SendReply)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 // RaftGrouperServer is the server API for RaftGrouper service.
 type RaftGrouperServer interface {
 	// Sends a raft message to peer
-	Send(context.Context, *SendRequest) (*SendReply, error)
+	Send(RaftGrouper_SendServer) error
 }
 
 func RegisterRaftGrouperServer(s *grpc.Server, srv RaftGrouperServer) {
 	s.RegisterService(&_RaftGrouper_serviceDesc, srv)
 }
 
-func _RaftGrouper_Send_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SendRequest)
-	if err := dec(in); err != nil {
+func _RaftGrouper_Send_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(RaftGrouperServer).Send(&raftGrouperSendServer{stream})
+}
+
+type RaftGrouper_SendServer interface {
+	SendAndClose(*SendReply) error
+	Recv() (*SendRequest, error)
+	grpc.ServerStream
+}
+
+type raftGrouperSendServer struct {
+	grpc.ServerStream
+}
+
+func (x *raftGrouperSendServer) SendAndClose(m *SendReply) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func (x *raftGrouperSendServer) Recv() (*SendRequest, error) {
+	m := new(SendRequest)
+	if err := x.ServerStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
-	if interceptor == nil {
-		return srv.(RaftGrouperServer).Send(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/proto.RaftGrouper/Send",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RaftGrouperServer).Send(ctx, req.(*SendRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+	return m, nil
 }
 
 var _RaftGrouper_serviceDesc = grpc.ServiceDesc{
 	ServiceName: "proto.RaftGrouper",
 	HandlerType: (*RaftGrouperServer)(nil),
-	Methods: []grpc.MethodDesc{
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
 		{
-			MethodName: "Send",
-			Handler:    _RaftGrouper_Send_Handler,
+			StreamName:    "Send",
+			Handler:       _RaftGrouper_Send_Handler,
+			ClientStreams: true,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
 	Metadata: "raftgrp.proto",
 }
 
-func init() { proto.RegisterFile("raftgrp.proto", fileDescriptor_raftgrp_fb139697c0c7a93b) }
+func init() { proto.RegisterFile("raftgrp.proto", fileDescriptor_raftgrp_c20e52a28669b8c0) }
 
-var fileDescriptor_raftgrp_fb139697c0c7a93b = []byte{
-	// 193 bytes of a gzipped FileDescriptorProto
+var fileDescriptor_raftgrp_c20e52a28669b8c0 = []byte{
+	// 195 bytes of a gzipped FileDescriptorProto
 	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xe2, 0xe2, 0x2d, 0x4a, 0x4c, 0x2b,
 	0x49, 0x2f, 0x2a, 0xd0, 0x2b, 0x28, 0xca, 0x2f, 0xc9, 0x17, 0x62, 0x05, 0x53, 0x4a, 0xca, 0x5c,
 	0xec, 0xbe, 0xa9, 0xc5, 0xc5, 0x89, 0xe9, 0xa9, 0x42, 0x12, 0x5c, 0xec, 0x05, 0x89, 0x95, 0x39,
@@ -239,9 +273,9 @@ var fileDescriptor_raftgrp_fb139697c0c7a93b = []byte{
 	0x51, 0x7e, 0x69, 0x41, 0x7c, 0x26, 0x44, 0x25, 0x73, 0x10, 0x3b, 0x98, 0xef, 0x99, 0x22, 0xa4,
 	0xc0, 0xc5, 0x9c, 0x5b, 0x9c, 0x2e, 0xc1, 0xa4, 0xc0, 0xa8, 0xc1, 0x6d, 0xc4, 0x07, 0xb1, 0x4a,
 	0x0f, 0x6a, 0x41, 0x10, 0x48, 0x4a, 0x49, 0x9a, 0x8b, 0x13, 0x62, 0x56, 0x41, 0x4e, 0xa5, 0x10,
-	0x1f, 0x17, 0x53, 0x7e, 0x36, 0xd8, 0x0c, 0xce, 0x20, 0xa6, 0xfc, 0x6c, 0x23, 0x5b, 0x2e, 0xee,
-	0xa0, 0xc4, 0xb4, 0x12, 0x77, 0x90, 0x69, 0xa9, 0x45, 0x42, 0x7a, 0x5c, 0x2c, 0x20, 0xb5, 0x42,
-	0x42, 0x50, 0x83, 0x90, 0x1c, 0x21, 0x25, 0x80, 0x22, 0x56, 0x90, 0x53, 0xa9, 0xc4, 0x90, 0xc4,
-	0x06, 0x16, 0x32, 0x06, 0x04, 0x00, 0x00, 0xff, 0xff, 0xda, 0x14, 0xab, 0x27, 0xeb, 0x00, 0x00,
-	0x00,
+	0x1f, 0x17, 0x53, 0x7e, 0x36, 0xd8, 0x0c, 0xce, 0x20, 0xa6, 0xfc, 0x6c, 0x23, 0x7b, 0x2e, 0xee,
+	0xa0, 0xc4, 0xb4, 0x12, 0x77, 0x90, 0x69, 0xa9, 0x45, 0x42, 0x06, 0x5c, 0x2c, 0x20, 0xb5, 0x42,
+	0x42, 0x50, 0x83, 0x90, 0x1c, 0x21, 0x25, 0x80, 0x22, 0x56, 0x90, 0x53, 0xa9, 0xc4, 0xa0, 0xc1,
+	0x98, 0xc4, 0x06, 0x16, 0x34, 0x06, 0x04, 0x00, 0x00, 0xff, 0xff, 0xb7, 0xc3, 0x27, 0xfe, 0xed,
+	0x00, 0x00, 0x00,
 }

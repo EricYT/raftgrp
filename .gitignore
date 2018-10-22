@@ -27,5 +27,5 @@ _testmain.go
 *.prof
 *.swp
 
-raftgrpexample/log/
+raftgrpexample/log-*
 raftgrpexample/raftgrpexample

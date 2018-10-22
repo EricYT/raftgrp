@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/md5"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -27,6 +28,8 @@ func (h *httpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer r.Body.Close()
+
+		log.Printf("[httpKVAPI] body: (%x)", md5.Sum(val))
 
 		h.kv.Put(key, val)
 

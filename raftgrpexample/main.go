@@ -37,7 +37,9 @@ func main() {
 	defer grp.Stop()
 	log.Println("raft group start ok")
 	kv := newKvStore(grp)
-	//grp.SetFSM(kv)
+
+	// set fsm for grp
+	grp.SetFSM(kv)
 
 	// serve http
 	serveHttpKVAPI(kv, *port, nil, nil)

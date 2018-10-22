@@ -9,13 +9,13 @@ import (
 	"time"
 
 	etransport "github.com/EricYT/raftgrp/transport"
+	"github.com/pkg/errors"
 	"go.etcd.io/etcd/etcdserver/api/snap"
 	"go.etcd.io/etcd/pkg/fileutil"
 	"go.etcd.io/etcd/pkg/pbutil"
 	"go.etcd.io/etcd/pkg/types"
 	"go.etcd.io/etcd/raft"
 	"go.etcd.io/etcd/raft/raftpb"
-	"github.com/pkg/errors"
 	"go.uber.org/zap"
 
 	"github.com/EricYT/raftgrp/store"
@@ -25,6 +25,13 @@ var (
 	ErrRaftGroupShutdown error = errors.New("[RaftGroup] already shutdown")
 	ErrRaftGroupRemoved  error = errors.New("[RaftGroup] the member has been permanently removed from the cluster")
 )
+
+// user fsm
+type FSM interface {
+	RenderMessage(payload []byte) (p []byte, err error)
+	ProcessMessage(payload []byte) (p []byte, err error)
+	Apply(payload []byte) (err error)
+}
 
 type RaftGrouper interface {
 	// Propose try to replicate a message to all followers.
@@ -74,6 +81,10 @@ type RaftGroup struct {
 
 	leadTimeMu      sync.RWMutex
 	leadElectedTime time.Time
+
+	// user fms for processing data before sending to peers and
+	// cutting data when receiving message.
+	fsm FSM
 }
 
 func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err error) {
@@ -162,6 +173,10 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 	return grp, nil
 }
 
+func (g *RaftGroup) SetFSM(fsm FSM) {
+	g.fsm = fsm
+}
+
 func (g *RaftGroup) getLogger() *zap.Logger {
 	g.lgMu.RLock()
 	l := g.lg
@@ -216,56 +231,54 @@ func (g *RaftGroup) renderingMessage(ms []raftpb.Message) ([]raftpb.Message, err
 	lg := g.getLogger()
 	for i := range ms {
 		m := ms[i]
-		if m.Type == raftpb.MsgApp {
-			if m.Entries == nil || len(m.Entries) == 0 {
+		if m.Type != raftpb.MsgApp {
+			continue
+		}
+		if m.Entries == nil || len(m.Entries) == 0 {
+			continue
+		}
+		lg.Debug("[RaftGroup] rendering append message to", zap.Uint64("to", m.To))
+		for j := range m.Entries {
+			entry := m.Entries[j]
+			if entry.Data == nil || len(entry.Data) == 0 {
 				continue
 			}
-			for j := range m.Entries {
-				entry := m.Entries[j]
-				if entry.Data == nil || len(entry.Data) == 0 {
-					continue
-				}
-				// FIXME: redering message
-				lg.Debug("[RaftGroup] rendering append message ", zap.Any("append-entry", entry))
+			// FIXME: redering message
+			data, err := g.fsm.RenderMessage(entry.Data)
+			if err != nil {
+				lg.Warn("[RaftGroup] render message failed",
+					zap.Error(err),
+				)
+				continue
 			}
+			m.Entries[j].Data = data
 		}
 	}
 	return ms, nil
 }
 
 // Process takes a raft message and applies it to the server's raft state.
-func (g *RaftGroup) Process(ctx context.Context, m raftpb.Message) error {
-	// FIXME: m.From is removed
-	lg := g.getLogger()
-	if m.Type == raftpb.MsgApp {
-		if m.Entries != nil && len(m.Entries) != 0 {
-			//FIXME: unloading payload and rewrite message
-			log.Printf("[RaftGroup] Process message from (%#v) (%#v)", m.From, m)
-			for i := range m.Entries {
-				entry := m.Entries[i]
-				if entry.Data == nil || len(entry.Data) == 0 {
-					continue
-				}
-				lg.Debug("[RaftGroup] process append message ", zap.Any("append-entry", entry))
-			}
-		}
-	}
-	return g.r.Step(ctx, m)
-}
-
 func (g *RaftGroup) ProcessExtra(ctx context.Context, m *raftpb.Message) error {
 	// FIXME: m.From is removed
+
 	lg := g.getLogger()
 	if m.Type == raftpb.MsgApp {
 		if m.Entries != nil && len(m.Entries) != 0 {
 			//FIXME: unloading payload and rewrite message
-			log.Printf("[RaftGroup] Process message from (%#v) (%#v)", m.From, m)
+			lg.Info("[RaftGroup] Process message from", zap.Uint64("from", m.From))
 			for i := range m.Entries {
 				entry := m.Entries[i]
 				if entry.Data == nil || len(entry.Data) == 0 {
 					continue
 				}
-				lg.Debug("[RaftGroup] process append message ", zap.Any("append-entry", entry))
+				data, err := g.fsm.ProcessMessage(entry.Data)
+				if err != nil {
+					lg.Warn("[RaftGroup] process message failed",
+						zap.Error(err),
+					)
+					continue
+				}
+				m.Entries[i].Data = data
 			}
 		}
 	}
@@ -479,6 +492,13 @@ func (g *RaftGroup) applyEntryNormal(e *raftpb.Entry) {
 		zap.String("data", string(e.Data)),
 	)
 	// TODO: callback OnApply to use state machine
+	if err := g.fsm.Apply(e.Data); err != nil {
+		lg.Error("[RaftGroup] apply entry to user fsm failed",
+			zap.Uint64("index", e.Index),
+			zap.Uint64("term", e.Term),
+			zap.String("data", string(e.Data)),
+		)
+	}
 }
 
 func (g *RaftGroup) applyConfChange(cc raftpb.ConfChange) bool {

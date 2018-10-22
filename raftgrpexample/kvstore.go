@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/md5"
 	"encoding/json"
 	"log"
 	"sync"
@@ -85,11 +86,10 @@ func (m *kvMeta) Unmarshal(payload []byte) {
 	if err != nil {
 		panic(err)
 	}
-	log.Println("[kvMeta] Unmarshal meta: ", string(m.Payload))
 }
 
 func (kv *kvstore) Put(key string, val []byte) (err error) {
-	log.Printf("[kvstore] put key(%s) val(%s)", key, string(val))
+	log.Printf("[kvstore] put key(%s)", key)
 	// unloading value
 	bid, err := kv.blobStore.Put(val)
 	if err != nil {
@@ -147,7 +147,7 @@ func (kv *kvstore) RenderMessage(payload []byte) (p []byte, err error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "kvstore: render message get blob error")
 	}
-	log.Printf("[kvstore] render message payload: (%#v) val from blob: (%s)", meta, string(val))
+	log.Printf("[kvstore] render message payload: (%#v) val from blob: (%x)", meta, md5.Sum(val))
 	meta.ReqId = 0
 	meta.BId = 0
 	meta.Payload = val
@@ -159,6 +159,7 @@ func (kv *kvstore) RenderMessage(payload []byte) (p []byte, err error) {
 func (kv *kvstore) ProcessMessage(payload []byte) (p []byte, err error) {
 	meta := &kvMeta{}
 	meta.Unmarshal(payload)
+	log.Printf("[kvstore] process message payload: (%x)", md5.Sum(meta.Payload))
 
 	bid, err := kv.blobStore.Put(meta.Payload)
 	if err != nil {

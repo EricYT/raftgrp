@@ -1,12 +1,14 @@
 package transport
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net"
 
 	"github.com/EricYT/raftgrp/proto"
-	"go.etcd.io/etcd/raft/raftpb"
 	"github.com/pkg/errors"
+	"go.etcd.io/etcd/raft/raftpb"
 	"go.uber.org/zap"
 	grpc "google.golang.org/grpc"
 )
@@ -56,26 +58,49 @@ type raftServer struct {
 	hnd    Handler
 }
 
-func (rs *raftServer) Send(ctx context.Context, req *proto.SendRequest) (*proto.SendReply, error) {
-	reply := &proto.SendReply{}
+func (rs *raftServer) Send(stream proto.RaftGrouper_SendServer) error {
 
-	gid := uint64(req.GroupId)
-	//msg := req.Msg
+	var (
+		gid uint64
+		req *proto.SendRequest
 
-	// unmarshal message
+		err error
+	)
+
+	reply := &proto.SendReply{Ok: "done"}
+	defer func() {
+		if err != nil {
+			reply.Ok = err.Error()
+		}
+		stream.SendAndClose(reply)
+	}()
+
+	payload := new(bytes.Buffer)
+readloop:
+	for {
+		req, err = stream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				break readloop
+			}
+			return err
+		}
+		// TODO: split metadata and payload
+		gid = uint64(req.GetGroupId())
+		payload.Write(req.GetMsg().GetPayload())
+	}
+
+	// unmarshal raft message
 	m := &raftpb.Message{}
-	if err := m.Unmarshal(req.Msg.Payload); err != nil {
-		reply.Ok = "unmarshal failed"
-		return reply, err
+	if err = m.Unmarshal(payload.Bytes()); err != nil {
+		return err
 	}
 
-	if err := rs.hnd.Process(ctx, gid, m); err != nil {
-		reply.Ok = "raft group process error"
-		return reply, err
+	if err = rs.hnd.Process(stream.Context(), gid, m); err != nil {
+		return err
 	}
 
-	reply.Ok = "done"
-	return reply, nil
+	return nil
 }
 
 type snapshotServer struct {
