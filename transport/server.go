@@ -31,6 +31,10 @@ type serverManager struct {
 func (sm *serverManager) Start() error {
 	lis, err := net.Listen("tcp", sm.Addr)
 	if err != nil {
+		sm.Logger.Error("[serverManager] listen failed",
+			zap.String("address", sm.Addr),
+			zap.Error(err),
+		)
 		return errors.Wrapf(err, "[serverManager] listen addrss %s error", sm.Addr)
 	}
 	sm.s = grpc.NewServer()
@@ -40,6 +44,10 @@ func (sm *serverManager) Start() error {
 
 	// blocking
 	if err := sm.s.Serve(lis); err != nil {
+		sm.Logger.Error("[serverManager] serve failed",
+			zap.String("address", sm.Addr),
+			zap.Error(err),
+		)
 		return errors.Wrap(err, "[serverManager] tcp serve error")
 	}
 

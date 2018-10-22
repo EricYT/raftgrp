@@ -21,7 +21,7 @@ type GroupConfig struct {
 
 	DataDir string
 
-	TickMs        uint
+	TickMs        int
 	ElectionTicks int
 	PreVote       bool
 	SnapshotCount uint64

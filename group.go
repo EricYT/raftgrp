@@ -119,10 +119,18 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 
 	switch {
 	case isNew:
+		cfg.Logger.Info("[RaftGroup] create raft group",
+			zap.Uint64("group-id", cfg.GID),
+			zap.Uint64("id", cfg.ID),
+		)
 		topology, err = NewRaftGroupTopology(cfg.Logger, cfg.Peers)
 		topology.SetID(types.ID(id))
 		n = startNode(cfg, id, topology.Members(), storageBackend)
 	case !isNew:
+		cfg.Logger.Info("[RaftGroup] restart raft group",
+			zap.Uint64("group-id", cfg.GID),
+			zap.Uint64("id", cfg.ID),
+		)
 		if err = fileutil.IsDirWriteable(cfg.MemberDir()); err != nil {
 			return nil, errors.Errorf("cannot write to member directory: %v", err)
 		}
