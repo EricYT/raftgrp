@@ -96,6 +96,9 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					if err := r.storage.SaveSnap(rd.Snapshot); err != nil {
 						r.lg.Fatal("failed to save Raft snapshot", zap.Error(err))
 					}
+					if err := r.storage.ApplySnapshot(rd.Snapshot); err != nil {
+						r.lg.Fatal("failed to apply snapshot", zap.Error(err))
+					}
 				}
 				r.storage.Append(rd.Entries)
 

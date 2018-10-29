@@ -19,12 +19,15 @@ type GroupConfig struct {
 	ID    uint64
 	Peers []*Peer
 
+	NewCluster bool
+
 	DataDir string
 
-	TickMs        int
-	ElectionTicks int
-	PreVote       bool
-	SnapshotCount uint64
+	TickMs                 int
+	ElectionTicks          int
+	PreVote                bool
+	SnapshotCount          uint64
+	SnapshotCatchUpEntries uint64
 }
 
 func (g GroupConfig) MemberDir() string {

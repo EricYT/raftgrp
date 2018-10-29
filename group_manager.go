@@ -21,9 +21,10 @@ var (
 )
 
 const (
-	defaultTickMs        int    = 1000
-	defaultElectionTicks int    = 10
-	defaultSnapshotCount uint64 = 10000
+	defaultTickMs                 int    = 1000
+	defaultElectionTicks          int    = 10
+	defaultSnapshotCount          uint64 = 10
+	defaultSnapshotCatchUpEntries uint64 = 5
 )
 
 type RaftGroupManager struct {
@@ -43,7 +44,6 @@ func NewRaftGroupManager(lg *zap.Logger, logdir, addr string) *RaftGroupManager 
 		lg = zap.NewExample()
 	}
 
-	log.Println("[RaftGroupManager] new 1")
 	// initialize raft group log directory
 	if terr := fileutil.TouchDirAll(logdir); terr != nil {
 		lg.Fatal("[RaftGroupManager] create raft group log directory error",
@@ -52,7 +52,6 @@ func NewRaftGroupManager(lg *zap.Logger, logdir, addr string) *RaftGroupManager 
 		)
 	}
 
-	log.Println("[RaftGroupManager] new 2")
 	rm := &RaftGroupManager{
 		Logger: lg,
 		logdir: logdir,
@@ -61,7 +60,6 @@ func NewRaftGroupManager(lg *zap.Logger, logdir, addr string) *RaftGroupManager 
 	}
 	rm.tm = etransport.NewTransportManager(lg, addr, rm)
 
-	log.Println("[RaftGroupManager] new 3")
 	return rm
 }
 
@@ -90,7 +88,7 @@ func (rm *RaftGroupManager) Process(ctx context.Context, gid uint64, m *raftpb.M
 	return ErrRaftGroupManagerNotFound
 }
 
-func (rm *RaftGroupManager) NewRaftGroup(lg *zap.Logger, gid, id uint64, peers []string) (*RaftGroup, error) {
+func (rm *RaftGroupManager) NewRaftGroup(lg *zap.Logger, gid, id uint64, peers []string, newCluster bool) (*RaftGroup, error) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	if g, ok := rm.groups[gid]; ok {
@@ -102,10 +100,10 @@ func (rm *RaftGroupManager) NewRaftGroup(lg *zap.Logger, gid, id uint64, peers [
 		return rm.restartRaftGroup(lg, gid, id)
 	}
 
-	return rm.newRaftGroup(lg, gid, id, peers)
+	return rm.newRaftGroup(lg, gid, id, peers, newCluster)
 }
 
-func (rm *RaftGroupManager) newRaftGroup(lg *zap.Logger, gid, id uint64, peers []string) (*RaftGroup, error) {
+func (rm *RaftGroupManager) newRaftGroup(lg *zap.Logger, gid, id uint64, peers []string, newCluster bool) (*RaftGroup, error) {
 	if lg == nil {
 		lg = rm.Logger
 	}
@@ -124,14 +122,17 @@ func (rm *RaftGroupManager) newRaftGroup(lg *zap.Logger, gid, id uint64, peers [
 
 	trans := rm.tm.CreateTransport(lg, gid)
 	grp, err := NewRaftGroup(GroupConfig{
-		Logger:        lg,
-		ID:            id,
-		Peers:         ParsePeers(peers),
-		DataDir:       gdir,
-		TickMs:        defaultTickMs,
-		ElectionTicks: defaultElectionTicks,
-		PreVote:       false,
-		SnapshotCount: defaultSnapshotCount,
+		Logger:                 lg,
+		ID:                     id,
+		GID:                    gid,
+		Peers:                  ParsePeers(peers),
+		NewCluster:             newCluster,
+		DataDir:                gdir,
+		TickMs:                 defaultTickMs,
+		ElectionTicks:          defaultElectionTicks,
+		PreVote:                false,
+		SnapshotCount:          defaultSnapshotCount,
+		SnapshotCatchUpEntries: defaultSnapshotCatchUpEntries,
 	}, trans)
 	if err != nil {
 		lg.Error("[RaftGroupManager] create raft group failed",
@@ -159,17 +160,17 @@ func (rm *RaftGroupManager) restartRaftGroup(lg *zap.Logger, gid, id uint64) (*R
 		return g, ErrRaftGroupManagerLaunched
 	}
 
-	log.Println("restart raft group start transport")
 	trans := rm.tm.CreateTransport(lg, gid)
-	log.Println("restart raft group")
 	grp, err := NewRaftGroup(GroupConfig{
-		Logger:        lg,
-		ID:            id,
-		DataDir:       logDirByGId(rm.logdir, gid),
-		TickMs:        defaultTickMs,
-		ElectionTicks: defaultElectionTicks,
-		PreVote:       false,
-		SnapshotCount: defaultSnapshotCount,
+		Logger:                 lg,
+		ID:                     id,
+		GID:                    gid,
+		DataDir:                logDirByGId(rm.logdir, gid),
+		TickMs:                 defaultTickMs,
+		ElectionTicks:          defaultElectionTicks,
+		PreVote:                false,
+		SnapshotCount:          defaultSnapshotCount,
+		SnapshotCatchUpEntries: defaultSnapshotCatchUpEntries,
 	}, trans)
 	if err != nil {
 		lg.Error("[RaftGroupManager] restart raft group failed",
@@ -185,6 +186,14 @@ func (rm *RaftGroupManager) restartRaftGroup(lg *zap.Logger, gid, id uint64) (*R
 	)
 	rm.groups[gid] = grp
 	return grp, nil
+}
+
+func (rm *RaftGroupManager) AddPeer(ctx context.Context, gid, peerid uint64, addr string) error {
+	panic("not implement")
+}
+
+func (rm *RaftGroupManager) RemovePeer(ctx context.Context, gid, peerid uint64) error {
+	panic("not implement")
 }
 
 func logDirByGId(parent string, gid uint64) string {

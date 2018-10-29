@@ -180,6 +180,14 @@ func (kv *kvstore) GetBlob(bid BlobId) (blob []byte, err error) {
 	return kv.blobStore.Get(bid)
 }
 
+func (kv *kvstore) AddNode(nodeid uint64) error {
+	panic("not implement")
+}
+
+func (kv *kvstore) RemoveNode(nodeid uint64) error {
+	panic("not implement")
+}
+
 // a memory implementation of blob store engine
 type blobStore struct {
 	mu        sync.Mutex

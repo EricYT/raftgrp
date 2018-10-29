@@ -1,6 +1,7 @@
 package raftgrp
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -15,9 +16,10 @@ import (
 type RaftGroupTopology struct {
 	lg *zap.Logger
 
-	localID types.ID
+	groupID uint64
+	peerID  types.ID
 
-	// backend
+	// TODO: backend
 
 	sync.Mutex
 	members map[types.ID]*Member
@@ -26,7 +28,7 @@ type RaftGroupTopology struct {
 	removed map[types.ID]bool
 }
 
-func NewRaftGroupTopology(lg *zap.Logger, peers []*Peer) (*RaftGroupTopology, error) {
+func NewTopologyWithPeers(lg *zap.Logger, peers []*Peer) (*RaftGroupTopology, error) {
 	t := NewTopology(lg)
 	for i := range peers {
 		p := peers[i]
@@ -50,11 +52,17 @@ func NewTopology(lg *zap.Logger) *RaftGroupTopology {
 	}
 }
 
-func (t *RaftGroupTopology) SetID(localID types.ID) {
-	t.localID = localID
+func (t *RaftGroupTopology) SetID(peerID types.ID) {
+	t.peerID = peerID
 }
 
-func (t *RaftGroupTopology) ID() types.ID { return t.localID }
+func (t *RaftGroupTopology) SetGroupID(gid uint64) {
+	t.groupID = gid
+}
+
+func (t *RaftGroupTopology) PeerID() types.ID { return t.peerID }
+
+func (t *RaftGroupTopology) GroupID() uint64 { return t.groupID }
 
 func (t *RaftGroupTopology) Members() []*Member {
 	t.Lock()
@@ -99,8 +107,8 @@ func (t *RaftGroupTopology) AddMember(m *Member) {
 	defer t.Unlock()
 	t.members[m.ID] = m
 	t.lg.Info("added member",
-		zap.String("cluster-id", t.ID().String()),
-		zap.String("local-member-id", t.localID.String()),
+		zap.Uint64("group-id", t.groupID),
+		zap.String("local-member-id", t.peerID.String()),
 		zap.String("added-peer-id", m.ID.String()),
 		zap.String("added-peer-addr", m.Addr),
 	)
@@ -115,15 +123,15 @@ func (t *RaftGroupTopology) RemoveMember(id types.ID) {
 
 	if ok {
 		t.lg.Info("removed member",
-			zap.String("cluster-id", t.ID().String()),
-			zap.String("local-member-id", t.localID.String()),
+			zap.Uint64("group-id", t.GroupID()),
+			zap.String("local-member-id", t.peerID.String()),
 			zap.String("removed-peer-id", id.String()),
 			zap.String("removed-peer-addr", m.Addr),
 		)
 	} else {
 		t.lg.Info("skiped removing already removed member",
-			zap.String("cluster-id", t.ID().String()),
-			zap.String("local-member-id", t.localID.String()),
+			zap.Uint64("group-id", t.GroupID()),
+			zap.String("local-member-id", t.peerID.String()),
 			zap.String("removed-peer-id", id.String()),
 		)
 	}
@@ -157,14 +165,59 @@ func (t *RaftGroupTopology) ValidateConfigurationChange(cc raftpb.ConfChange) er
 	return nil
 }
 
+func (t *RaftGroupTopology) Marshal() []byte {
+	t.Lock()
+	defer t.Unlock()
+
+	p := &RaftGroupTopologyPersistStructure{
+		GroupID: t.groupID,
+		PeerID:  t.peerID,
+		Members: t.members,
+	}
+	for r, _ := range t.removed {
+		p.Removed = append(p.Removed, r)
+	}
+
+	data, _ := json.Marshal(p)
+	return data
+}
+
+func (t *RaftGroupTopology) Recovery(data []byte) error {
+	var p RaftGroupTopologyPersistStructure
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+
+	t.Lock()
+	t.groupID = p.GroupID
+	t.peerID = p.PeerID
+	t.members = p.Members
+
+	for i := range p.Removed {
+		t.removed[p.Removed[i]] = true
+	}
+
+	t.Unlock()
+
+	return nil
+}
+
+// persist structure
+type RaftGroupTopologyPersistStructure struct {
+	GroupID uint64               `json:"group_id"`
+	PeerID  types.ID             `json:"peer_id"`
+	Members map[types.ID]*Member `json:"members"`
+	Removed []types.ID           `json:"removed"`
+}
+
 // member
 type RaftAttributes struct {
 	Addr string `json:"addr"`
 }
 
 type Member struct {
-	ID types.ID `json:"id"`
-	RaftAttributes
+	ID             types.ID `json:"id"`
+	RaftAttributes `json:"raft_attributes"`
 }
 
 func NewMember(id uint64, addr string) *Member {

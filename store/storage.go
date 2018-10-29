@@ -24,6 +24,7 @@ type Storage interface {
 	Append(entries []raftpb.Entry) error
 
 	CreateSnapshot(snapi uint64, cs *raftpb.ConfState, data []byte) (snap raftpb.Snapshot, err error)
+	Compact(compacti uint64) error
 
 	// Save function saves ents and state to the underlying stable storage.
 	// Save MUST block until st and ents are on stable storage.
@@ -60,10 +61,6 @@ func (st *storage) SaveSnap(snap raftpb.Snapshot) error {
 		return err
 	}
 	if err := st.WAL.ReleaseLockTo(snap.Metadata.Index); err != nil {
-		return err
-	}
-
-	if err := st.MemoryStorage.ApplySnapshot(snap); err != nil {
 		return err
 	}
 	return nil
@@ -122,24 +119,21 @@ func readWAL(lg *zap.Logger, waldir string, snap walpb.Snapshot) (w *wal.WAL, st
 	return w, st, ents
 }
 
-func ensureWAL(lg *zap.Logger, waldir string) bool {
-	if !wal.Exist(waldir) {
-		w, err := wal.Create(lg, waldir, nil)
-		if err != nil {
-			lg.Panic("[storage] create wal directory error ",
-				zap.String("wal-directory", waldir),
-				zap.Error(err),
-			)
-		}
-		w.Close()
-		return true
+// storage initialize functions
+func NewStorage(lg *zap.Logger, waldir string, ss *snap.Snapshotter) *storage {
+	w, err := wal.Create(lg, waldir, nil)
+	if err != nil {
+		lg.Fatal("[storage] create wal directory error",
+			zap.String("wal-directory", waldir),
+			zap.Error(err),
+		)
 	}
-	return false
+	ms := raft.NewMemoryStorage()
+
+	return newStorage(ms, w, ss)
 }
 
-// storage initialize functions
-func NewStorage(lg *zap.Logger, waldir string, snapshot *raftpb.Snapshot, ss *snap.Snapshotter) (*storage, bool) {
-	isNew := ensureWAL(lg, waldir)
+func RestartStorage(lg *zap.Logger, waldir string, snapshot *raftpb.Snapshot, ss *snap.Snapshotter) *storage {
 	walsnap := walpb.Snapshot{}
 	if snapshot != nil {
 		walsnap.Index, walsnap.Term = snapshot.Metadata.Index, snapshot.Metadata.Term
@@ -152,5 +146,9 @@ func NewStorage(lg *zap.Logger, waldir string, snapshot *raftpb.Snapshot, ss *sn
 	ms.SetHardState(st)
 	ms.Append(ents)
 
-	return newStorage(ms, w, ss), isNew
+	return newStorage(ms, w, ss)
+}
+
+func HaveStorage(dir string) bool {
+	return wal.Exist(dir)
 }

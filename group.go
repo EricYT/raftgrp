@@ -46,6 +46,9 @@ type RaftGrouper interface {
 var _ RaftGrouper = (*RaftGroup)(nil)
 
 type RaftGroup struct {
+	groupID uint64
+	Cfg     GroupConfig
+
 	snapshottedIndex uint64 // must use atomic operations to access;
 	appliedIndex     uint64 // must use atomic operations to access;
 	committedIndex   uint64 // must use aotmic operations to access;
@@ -53,12 +56,10 @@ type RaftGroup struct {
 	lead             uint64 // must use atomic operations to access;
 	confState        raftpb.ConfState
 
-	id       types.ID
+	peerID   types.ID
 	topology *RaftGroupTopology
 
 	r raftNode
-
-	Cfg GroupConfig
 
 	lgMu *sync.RWMutex
 	lg   *zap.Logger
@@ -97,7 +98,7 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 		// FIXME:
 		storageBackend store.Storage
 
-		id       uint64
+		peerID   uint64
 		topology *RaftGroupTopology
 	)
 
@@ -108,41 +109,80 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 			zap.Error(err))
 	}
 	ss := snap.New(cfg.Logger, cfg.SnapDir())
-	snapshot, err = ss.Load()
-	if err != nil && err != snap.ErrNoSnapshot {
-		return nil, errors.Wrap(err, "new raft group error")
-	}
 	// end
 
-	id = cfg.ID
-	storageBackend, isNew := store.NewStorage(cfg.Logger, cfg.LogDir(), snapshot, ss)
+	haveStorage := store.HaveStorage(cfg.LogDir())
+
+	peerID = cfg.ID
 
 	switch {
-	case isNew:
-		cfg.Logger.Info("[RaftGroup] create raft group",
+	case !haveStorage && !cfg.NewCluster:
+		cfg.Logger.Info("[RaftGroup] joining a existing raft group",
 			zap.Uint64("group-id", cfg.GID),
 			zap.Uint64("id", cfg.ID),
 		)
-		topology, err = NewRaftGroupTopology(cfg.Logger, cfg.Peers)
-		topology.SetID(types.ID(id))
-		n = startNode(cfg, id, topology.Members(), storageBackend)
-	case !isNew:
+
+		topology = NewTopology(cfg.Logger)
+		topology.SetGroupID(cfg.GID)
+		topology.SetID(types.ID(peerID))
+
+		storageBackend = store.NewStorage(cfg.Logger, cfg.LogDir(), ss)
+		n = startNode(cfg, peerID, nil, storageBackend)
+
+	case !haveStorage && cfg.NewCluster:
+		cfg.Logger.Info("[RaftGroup] creating a new raft group",
+			zap.Uint64("group-id", cfg.GID),
+			zap.Uint64("id", cfg.ID),
+		)
+
+		topology, err = NewTopologyWithPeers(cfg.Logger, cfg.Peers)
+		if err != nil {
+			cfg.Logger.Error("[RaftGroup] new topology with peers failed",
+				zap.Uint64("group-id", cfg.GID),
+				zap.Uint64("id", cfg.ID),
+				zap.Any("peers", cfg.Peers),
+				zap.Error(err),
+			)
+			return nil, err
+		}
+		topology.SetGroupID(cfg.GID)
+		topology.SetID(types.ID(cfg.ID))
+
+		storageBackend = store.NewStorage(cfg.Logger, cfg.LogDir(), ss)
+		n = startNode(cfg, peerID, topology.Members(), storageBackend)
+
+	case haveStorage:
 		cfg.Logger.Info("[RaftGroup] restart raft group",
 			zap.Uint64("group-id", cfg.GID),
 			zap.Uint64("id", cfg.ID),
 		)
+
 		if err = fileutil.IsDirWriteable(cfg.MemberDir()); err != nil {
 			return nil, errors.Errorf("cannot write to member directory: %v", err)
 		}
-		if snapshot != nil {
-			// FIXME: Is necessary to recover something ?
+
+		snapshot, err = ss.Load()
+		if err != nil && err != snap.ErrNoSnapshot {
+			return nil, err
 		}
-		n = restartNode(cfg, id, storageBackend)
-		// FIXME: recover from store
-		topology, err = NewRaftGroupTopology(cfg.Logger, cfg.Peers)
-		topology.SetID(types.ID(id))
-		//topology = NewTopology(cfg.Logger)
-		//topology.SetID(types.ID(id))
+
+		topology = NewTopology(cfg.Logger)
+		if snapshot != nil {
+			if err := topology.Recovery(snapshot.Data); err != nil {
+				cfg.Logger.Error("[RaftGroup] recover topology from snapshot failed.",
+					zap.Uint64("group-id", cfg.GID),
+					zap.Uint64("id", cfg.ID),
+					zap.Any("snapshot", snapshot),
+					zap.Error(err),
+				)
+				return nil, err
+			}
+		}
+
+		storageBackend = store.RestartStorage(cfg.Logger, cfg.LogDir(), snapshot, ss)
+		n = restartNode(cfg, peerID, storageBackend)
+	default:
+		return nil, errors.Errorf("[RaftGroup] unknow raft group start config")
 	}
 
 	heartbeat := time.Duration(cfg.TickMs) * time.Millisecond
@@ -162,13 +202,14 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 				storage:     storageBackend,
 			},
 		),
-		id:       types.ID(id),
+		groupID:  cfg.GID,
+		peerID:   types.ID(peerID),
 		topology: topology,
 	}
 
 	// initialize transport
 	for _, m := range grp.topology.Members() {
-		if grp.id != m.ID {
+		if grp.peerID != m.ID {
 			cfg.Logger.Info("[RaftGroup] add peer ",
 				zap.Uint64("peer-id", uint64(m.ID)),
 				zap.String("addr", m.Addr))
@@ -223,7 +264,7 @@ func (g *RaftGroup) AddMember(ctx context.Context, m *Member) error {
 	return g.configure(ctx, cc)
 }
 
-func (g *RaftGroup) RemovePeer(ctx context.Context, id uint64) error {
+func (g *RaftGroup) RemoveMember(ctx context.Context, id uint64) error {
 	// FIXME: balabala check
 
 	cc := raftpb.ConfChange{
@@ -537,14 +578,14 @@ func (g *RaftGroup) applyConfChange(cc raftpb.ConfChange) bool {
 			)
 		}
 		g.topology.AddMember(m)
-		if m.ID != g.id {
+		if m.ID != g.peerID {
 			g.r.transport.AddPeer(m.ID, []string{m.Addr})
 		}
 
 	case raftpb.ConfChangeRemoveNode:
 		id := types.ID(cc.NodeID)
 		g.topology.RemoveMember(id)
-		if id == g.id {
+		if id == g.peerID {
 			return true
 		}
 		g.r.transport.RemovePeer(id)
@@ -567,14 +608,23 @@ func (g *RaftGroup) configure(ctx context.Context, cc raftpb.ConfChange) (err er
 
 // snapshot
 func (g *RaftGroup) triggerSnapshot() {
+	lg := g.getLogger()
+
 	appliedi := g.getAppliedIndex()
 	snapi := g.getSnapshottedIndex()
+
+	//	lg.Info("[RaftGroup] trigger snapshot",
+	//		zap.Uint64("applied-index", appliedi),
+	//		zap.Uint64("snapshot-index", snapi),
+	//		zap.Uint64("snapshot-count", g.Cfg.SnapshotCount),
+	//	)
+
 	if appliedi-snapi <= g.Cfg.SnapshotCount {
 		return
 	}
 
-	lg := g.getLogger()
 	lg.Info("[RaftGroup] triggering snapshot",
+		zap.Uint64("group-id", g.groupID),
 		zap.String("local-id", g.ID().String()),
 		zap.Uint64("local-applied-index", appliedi),
 		zap.Uint64("local-snapshot-index", snapi),
@@ -587,9 +637,43 @@ func (g *RaftGroup) triggerSnapshot() {
 
 func (g *RaftGroup) snapshot(snapi uint64, cs raftpb.ConfState) {
 	// TODO: callback user fsm to gather snapshot information
+	lg := g.getLogger()
 
-	metadata := []byte{}
-	g.r.storage.CreateSnapshot(snapi, &cs, metadata)
+	metadata := g.topology.Marshal()
+	snapshot, err := g.r.storage.CreateSnapshot(snapi, &cs, metadata)
+	if err != nil {
+		lg.Fatal("[RaftGroup] snapshot create failed",
+			zap.Uint64("group-id", g.groupID),
+			zap.String("local-id", g.ID().String()),
+			zap.Error(err),
+		)
+	}
+	if err := g.r.storage.SaveSnap(snapshot); err != nil {
+		lg.Fatal("[RaftGroup] snapshot save failed",
+			zap.Uint64("group-id", g.groupID),
+			zap.String("local-id", g.ID().String()),
+			zap.Error(err),
+		)
+	}
+
+	// maybe trigger compact
+	compacti := uint64(1)
+	if snapi > g.Cfg.SnapshotCatchUpEntries {
+		compacti = snapi - g.Cfg.SnapshotCount
+	}
+
+	err = g.r.storage.Compact(compacti)
+	if err != nil {
+		if err == raft.ErrCompacted {
+			return
+		}
+
+		g.lg.Fatal("[RaftGroup] storage compact failed.",
+			zap.Uint64("group-id", g.groupID),
+			zap.String("id", g.peerID.String()),
+			zap.Error(err),
+		)
+	}
 }
 
 func (g *RaftGroup) HardStop() {
@@ -666,7 +750,7 @@ type RaftStatusGetter interface {
 	Term() uint64
 }
 
-func (g *RaftGroup) ID() types.ID { return g.topology.ID() }
+func (g *RaftGroup) ID() types.ID { return g.topology.PeerID() }
 
 func (g *RaftGroup) Leader() types.ID { return types.ID(g.getLead()) }
 
