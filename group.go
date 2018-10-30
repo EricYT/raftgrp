@@ -297,7 +297,7 @@ func (g *RaftGroup) renderMessage(ms []raftpb.Message) ([]raftpb.Message, error)
 	//FIXME: rewrite message before we send it
 	lg := g.getLogger()
 	for i := range ms {
-		m := ms[i]
+		m := &ms[i]
 		if m.Type != raftpb.MsgApp {
 			continue
 		}
@@ -309,11 +309,12 @@ func (g *RaftGroup) renderMessage(ms []raftpb.Message) ([]raftpb.Message, error)
 		ents := make([]raftpb.Entry, 0, len(m.Entries))
 		for j := range m.Entries {
 			entry := m.Entries[j]
-			ents = append(ents, entry)
 			if entry.Type != raftpb.EntryNormal {
+				ents = append(ents, entry)
 				continue
 			}
 			if entry.Data == nil || len(entry.Data) == 0 {
+				ents = append(ents, entry)
 				continue
 			}
 
@@ -327,9 +328,12 @@ func (g *RaftGroup) renderMessage(ms []raftpb.Message) ([]raftpb.Message, error)
 				lg.Warn("[RaftGroup] render message failed",
 					zap.Error(err),
 				)
+				// FIXME: ignore this message or send it ?
+				ents = append(ents, entry)
 				continue
 			}
 			entry.Data = data
+			ents = append(ents, entry)
 		}
 		m.Entries = ents
 	}
@@ -338,7 +342,9 @@ func (g *RaftGroup) renderMessage(ms []raftpb.Message) ([]raftpb.Message, error)
 
 // Process takes a raft message and applies it to the server's raft state.
 func (g *RaftGroup) Process(ctx context.Context, m *raftpb.Message) error {
-	// FIXME: m.From is removed
+	if g.topology.IsIDRemoved(types.ID(m.From)) {
+		return ErrIDRemoved
+	}
 
 	lg := g.getLogger()
 	if m.Type == raftpb.MsgApp {

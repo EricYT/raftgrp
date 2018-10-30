@@ -82,12 +82,12 @@ func (m *kvMeta) Marshal() []byte {
 }
 
 func (m *kvMeta) Unmarshal(payload []byte) {
-	log.Printf("[kvMeta] unmarshal payload: %s", string(payload))
 	err := json.Unmarshal(payload, m)
 	if err != nil {
 		log.Printf("[kvMeta] unmarshal error: %s payload: %s", string(payload))
 		panic(err)
 	}
+	log.Printf("[kvMeta] unmarshal payload: key (%s) bid (%v) payload (%x)", m.Key, m.BId, md5.Sum(m.Payload))
 }
 
 func (kv *kvstore) Put(key string, val []byte) (err error) {

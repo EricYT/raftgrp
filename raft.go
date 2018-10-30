@@ -135,8 +135,6 @@ func (r *raftNode) processMessages(ms []raftpb.Message) []raftpb.Message {
 			ms[i].To = 0
 		}
 
-		// FIXME: render message from here
-
 		if ms[i].Type == raftpb.MsgHeartbeat {
 			ok, exceed := r.td.Observe(ms[i].To)
 			if !ok {
@@ -150,6 +148,7 @@ func (r *raftNode) processMessages(ms []raftpb.Message) []raftpb.Message {
 			}
 		}
 	}
+
 	return ms
 }
 
