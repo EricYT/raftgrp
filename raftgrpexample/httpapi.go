@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/md5"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -58,12 +59,13 @@ func (h *httpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		cc := raftpb.ConfChange{
-			Type:    raftpb.ConfChangeAddNode,
-			NodeID:  nodeId,
-			Context: url,
+		log.Printf("[httpapi] add node (%d) addr (%s)", nodeId, string(url))
+		if err := h.kv.AddPeer(nodeId, string(url)); err != nil {
+			log.Printf("Failed to add peer: %s\n", err)
+			http.Error(w, fmt.Sprintf("Failed to POST id (%d) url (%s) error: %s",
+				nodeId, url, err), http.StatusInternalServerError)
+			return
 		}
-		h.confChangeC <- cc
 
 		// As above, optimistic that raft will apply the conf change
 		w.WriteHeader(http.StatusNoContent)
@@ -75,11 +77,12 @@ func (h *httpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		cc := raftpb.ConfChange{
-			Type:   raftpb.ConfChangeRemoveNode,
-			NodeID: nodeId,
+		if err := h.kv.RemovePeer(nodeId); err != nil {
+			log.Printf("Failed to delete peer: %s\n", err)
+			http.Error(w, fmt.Sprintf("Failed to POST id (%d) error: %s",
+				nodeId, err), http.StatusInternalServerError)
+			return
 		}
-		h.confChangeC <- cc
 
 		// As above, optimistic that raft will apply the conf change
 		w.WriteHeader(http.StatusNoContent)
@@ -93,12 +96,11 @@ func (h *httpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // serveHttpKVAPI starts a key-value server with a GET/PUT API and listens.
-func serveHttpKVAPI(kv *kvstore, port int, confChangeC chan<- raftpb.ConfChange, errorC <-chan error) {
+func serveHttpKVAPI(kv *kvstore, port int) {
 	srv := http.Server{
 		Addr: ":" + strconv.Itoa(port),
 		Handler: &httpKVAPI{
-			kv:          kv,
-			confChangeC: confChangeC,
+			kv: kv,
 		},
 	}
 	go func() {
@@ -106,9 +108,4 @@ func serveHttpKVAPI(kv *kvstore, port int, confChangeC chan<- raftpb.ConfChange,
 			log.Fatal(err)
 		}
 	}()
-
-	// exit when raft goes down
-	if err, ok := <-errorC; ok {
-		log.Fatal(err)
-	}
 }

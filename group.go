@@ -41,6 +41,9 @@ type RaftGrouper interface {
 	// If this entry was commited, Grouper will callback
 	// upstream to persist it.
 	Propose(ctx context.Context, payload []byte) error
+
+	AddMember(ctx context.Context, m *Member) error
+	RemoveMember(ctx context.Context, id uint64) error
 }
 
 var _ RaftGrouper = (*RaftGroup)(nil)
@@ -216,6 +219,18 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 			t.AddPeer(m.ID, []string{m.Addr})
 		}
 	}
+
+	// for those joining a existing cluster
+	for _, r := range cfg.Peers {
+		if r.ID != uint64(grp.peerID) {
+			cfg.Logger.Info("[RaftGroup] add remote peer",
+				zap.Uint64("peer-id", r.ID),
+				zap.String("addr", r.Addr),
+			)
+			t.AddPeer(types.ID(r.ID), []string{r.Addr})
+		}
+	}
+
 	trs := NewTransport(t, grp.renderMessage)
 	grp.r.transport = trs
 
@@ -286,13 +301,25 @@ func (g *RaftGroup) renderMessage(ms []raftpb.Message) ([]raftpb.Message, error)
 		if m.Entries == nil || len(m.Entries) == 0 {
 			continue
 		}
+
 		lg.Debug("[RaftGroup] rendering append message to", zap.Uint64("to", m.To))
+		ents := make([]raftpb.Entry, 0, len(m.Entries))
 		for j := range m.Entries {
 			entry := m.Entries[j]
-			if entry.Data == nil || len(entry.Data) == 0 {
+			if entry.Type != raftpb.EntryNormal {
+				ents = append(ents, entry)
 				continue
 			}
-			// FIXME: redering message
+			if entry.Data == nil || len(entry.Data) == 0 {
+				ents = append(ents, entry)
+				continue
+			}
+
+			// FIXME: redering message. Don't try to modify
+			// m.Entris[j].Data, it's a pointer point to
+			// the shared entry in 'g.r.storage'. But we can
+			// use one data copy serve all same entry from
+			// .RenderMessage function.
 			data, err := g.fsm.RenderMessage(entry.Data)
 			if err != nil {
 				lg.Warn("[RaftGroup] render message failed",
@@ -300,8 +327,10 @@ func (g *RaftGroup) renderMessage(ms []raftpb.Message) ([]raftpb.Message, error)
 				)
 				continue
 			}
-			m.Entries[j].Data = data
+			entry.Data = data
+			ents = append(ents, entry)
 		}
+		m.Entries = ents
 	}
 	return ms, nil
 }
@@ -312,14 +341,18 @@ func (g *RaftGroup) Process(ctx context.Context, m *raftpb.Message) error {
 
 	lg := g.getLogger()
 	if m.Type == raftpb.MsgApp {
-		if m.Entries != nil && len(m.Entries) != 0 {
+		if m.Entries != nil {
 			//FIXME: unloading payload and rewrite message
 			lg.Info("[RaftGroup] Process message from", zap.Uint64("from", m.From))
 			for i := range m.Entries {
 				entry := m.Entries[i]
+				if entry.Type != raftpb.EntryNormal {
+					continue
+				}
 				if entry.Data == nil || len(entry.Data) == 0 {
 					continue
 				}
+
 				data, err := g.fsm.ProcessMessage(entry.Data)
 				if err != nil {
 					lg.Warn("[RaftGroup] process message failed",
@@ -364,6 +397,7 @@ func (g *RaftGroup) start() {
 type raftReadyHandler struct {
 	updateSoftState func(*raft.SoftState)
 	applyAll        func(raftpb.Snapshot, []raftpb.Entry) error
+	publishSnapshot func(snapshot raftpb.Snapshot) error
 }
 
 func (g *RaftGroup) run() {
@@ -463,6 +497,22 @@ func (g *RaftGroup) applySnapshot(snap raftpb.Snapshot) error {
 	// FIXME:
 	// callback user fsm to do something initialize
 
+	// TODO: recover group info by snapshot
+	if snap.Data != nil {
+		if err := g.topology.Recovery(snap.Data); err != nil {
+			lg.Panic("[RaftGroup] recovery from snapshot failed.",
+				zap.Uint64("group-id", g.groupID),
+				zap.String("id", g.peerID.String()),
+				zap.Error(err),
+			)
+		}
+		for _, m := range g.topology.Members() {
+			if m.ID != g.peerID {
+				g.r.transport.AddPeer(m.ID, []string{m.Addr})
+			}
+		}
+	}
+
 	g.setAppliedIndex(snap.Metadata.Index)
 	g.setTerm(snap.Metadata.Term)
 	g.setSnapshottedIndex(snap.Metadata.Index)
@@ -558,7 +608,7 @@ func (g *RaftGroup) applyConfChange(cc raftpb.ConfChange) bool {
 	//	lg.Error("[RaftGroup] validate configureation change error",
 	//		zap.Error(err),
 	//	)
-	//	//cc.NodeID = raft.None
+	//	cc.NodeID = raft.None
 	//	g.r.ApplyConfChange(cc)
 	//	return false
 	//}
@@ -578,6 +628,7 @@ func (g *RaftGroup) applyConfChange(cc raftpb.ConfChange) bool {
 			)
 		}
 		g.topology.AddMember(m)
+
 		if m.ID != g.peerID {
 			g.r.transport.AddPeer(m.ID, []string{m.Addr})
 		}
@@ -588,6 +639,7 @@ func (g *RaftGroup) applyConfChange(cc raftpb.ConfChange) bool {
 		if id == g.peerID {
 			return true
 		}
+
 		g.r.transport.RemovePeer(id)
 
 	case raftpb.ConfChangeUpdateNode:
@@ -645,13 +697,16 @@ func (g *RaftGroup) snapshot(snapi uint64, cs raftpb.ConfState) {
 		lg.Fatal("[RaftGroup] snapshot create failed",
 			zap.Uint64("group-id", g.groupID),
 			zap.String("local-id", g.ID().String()),
+			zap.Uint64("snapshot-index", snapi),
 			zap.Error(err),
 		)
 	}
+
 	if err := g.r.storage.SaveSnap(snapshot); err != nil {
 		lg.Fatal("[RaftGroup] snapshot save failed",
 			zap.Uint64("group-id", g.groupID),
 			zap.String("local-id", g.ID().String()),
+			zap.Uint64("snapshot-index", snapi),
 			zap.Error(err),
 		)
 	}
@@ -659,8 +714,17 @@ func (g *RaftGroup) snapshot(snapi uint64, cs raftpb.ConfState) {
 	// maybe trigger compact
 	compacti := uint64(1)
 	if snapi > g.Cfg.SnapshotCatchUpEntries {
-		compacti = snapi - g.Cfg.SnapshotCount
+		compacti = snapi - g.Cfg.SnapshotCatchUpEntries
 	}
+
+	firstIndex, _ := g.r.storage.FirstIndex()
+	lg.Debug("[RaftGroup] before compacting",
+		zap.Uint64("group-id", g.groupID),
+		zap.String("local-id", g.ID().String()),
+		zap.Uint64("snapshot-index", snapi),
+		zap.Uint64("compact-index", compacti),
+		zap.Uint64("first-index", firstIndex),
+	)
 
 	err = g.r.storage.Compact(compacti)
 	if err != nil {
@@ -671,9 +735,19 @@ func (g *RaftGroup) snapshot(snapi uint64, cs raftpb.ConfState) {
 		g.lg.Fatal("[RaftGroup] storage compact failed.",
 			zap.Uint64("group-id", g.groupID),
 			zap.String("id", g.peerID.String()),
+			zap.Uint64("snapshot-index", snapi),
 			zap.Error(err),
 		)
 	}
+
+	firstIndex, _ = g.r.storage.FirstIndex()
+	lg.Debug("[RaftGroup] after compacting",
+		zap.Uint64("group-id", g.groupID),
+		zap.String("local-id", g.ID().String()),
+		zap.Uint64("snapshot-index", snapi),
+		zap.Uint64("compact-index", compacti),
+		zap.Uint64("first-index", firstIndex),
+	)
 }
 
 func (g *RaftGroup) HardStop() {

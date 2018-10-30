@@ -42,5 +42,7 @@ func main() {
 	grp.SetFSM(kv)
 
 	// serve http
-	serveHttpKVAPI(kv, *port, nil, nil)
+	serveHttpKVAPI(kv, *port)
+
+	<-(chan struct{})(nil)
 }

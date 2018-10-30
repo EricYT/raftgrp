@@ -11,6 +11,7 @@ import (
 	"github.com/EricYT/go-examples/utils/wait"
 	"github.com/EricYT/raftgrp"
 	"github.com/pkg/errors"
+	"go.etcd.io/etcd/pkg/types"
 )
 
 var (
@@ -81,8 +82,10 @@ func (m *kvMeta) Marshal() []byte {
 }
 
 func (m *kvMeta) Unmarshal(payload []byte) {
+	log.Printf("[kvMeta] unmarshal payload: %s", string(payload))
 	err := json.Unmarshal(payload, m)
 	if err != nil {
+		log.Printf("[kvMeta] unmarshal error: %s payload: %s", string(payload))
 		panic(err)
 	}
 }
@@ -139,6 +142,8 @@ func (kv *kvstore) Apply(payload []byte) (err error) {
 }
 
 // redering payload send to others
+// FIXME: If we can't cache the meta marshalling data, there are many same
+// copies for different peers we have to send messages.
 func (kv *kvstore) RenderMessage(payload []byte) (p []byte, err error) {
 	meta := &kvMeta{}
 	meta.Unmarshal(payload)
@@ -150,7 +155,6 @@ func (kv *kvstore) RenderMessage(payload []byte) (p []byte, err error) {
 	meta.ReqId = 0
 	meta.BId = 0
 	meta.Payload = val
-
 	return meta.Marshal(), nil
 }
 
@@ -180,12 +184,26 @@ func (kv *kvstore) GetBlob(bid BlobId) (blob []byte, err error) {
 	return kv.blobStore.Get(bid)
 }
 
-func (kv *kvstore) AddNode(nodeid uint64) error {
-	panic("not implement")
+func (kv *kvstore) AddPeer(id uint64, addr string) error {
+	m := &raftgrp.Member{
+		ID: types.ID(id),
+		RaftAttributes: raftgrp.RaftAttributes{
+			Addr: addr,
+		},
+	}
+
+	if err := kv.group.AddMember(context.TODO(), m); err != nil {
+		return err
+	}
+
+	return nil
 }
 
-func (kv *kvstore) RemoveNode(nodeid uint64) error {
-	panic("not implement")
+func (kv *kvstore) RemovePeer(id uint64) error {
+	if err := kv.group.RemoveMember(context.TODO(), id); err != nil {
+		return err
+	}
+	return nil
 }
 
 // a memory implementation of blob store engine

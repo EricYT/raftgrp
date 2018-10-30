@@ -66,26 +66,12 @@ func (st *storage) SaveSnap(snap raftpb.Snapshot) error {
 	return nil
 }
 
-const (
-	defaultSnapshotCatchUpEntries uint64 = 100000
-)
-
 func (st *storage) CreateSnapshot(snapi uint64, cs *raftpb.ConfState, data []byte) (snap raftpb.Snapshot, err error) {
 	snap, err = st.MemoryStorage.CreateSnapshot(snapi, cs, data)
 	if err != nil {
 		// the snapshot was done asynchronously with the progress of raft.
 		// raft might have already got a newer snapshot.
 		if err == raft.ErrSnapOutOfDate {
-			return
-		}
-		if err = st.SaveSnap(snap); err != nil {
-			return
-		}
-		compacti := uint64(1)
-		if snapi > defaultSnapshotCatchUpEntries {
-			compacti = snapi - defaultSnapshotCatchUpEntries
-		}
-		if err = st.MemoryStorage.Compact(compacti); err != nil {
 			return
 		}
 	}

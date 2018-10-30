@@ -148,6 +148,7 @@ func (t *RaftGroupTopology) ValidateConfigurationChange(cc raftpb.ConfChange) er
 	if t.IsIDRemoved(id) {
 		return ErrIDRemoved
 	}
+
 	switch cc.Type {
 	case raftpb.ConfChangeAddNode:
 		if t.MemberByID(id) != nil {

@@ -86,6 +86,15 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					r.td.Reset()
 				}
 
+				if !raft.IsEmptyHardState(rd.HardState) || len(rd.Entries) != 0 {
+					r.lg.Debug("[raftNode] hard state",
+						zap.Uint64("term", rd.HardState.Term),
+						zap.Uint64("vote", rd.HardState.Vote),
+						zap.Uint64("commit", rd.HardState.Commit),
+						zap.Int("entries-count", len(rd.Entries)),
+					)
+				}
+
 				// intend to persist hardstate and entries
 				if err := r.storage.Save(rd.HardState, rd.Entries); err != nil {
 					r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))
@@ -93,6 +102,9 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 
 				// intend to install snapshot
 				if !raft.IsEmptySnap(rd.Snapshot) {
+					r.lg.Info("[raftNode] install snapshot.",
+						zap.Any("snap-metadata", rd.Snapshot.Metadata),
+					)
 					if err := r.storage.SaveSnap(rd.Snapshot); err != nil {
 						r.lg.Fatal("failed to save Raft snapshot", zap.Error(err))
 					}
