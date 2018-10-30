@@ -52,7 +52,7 @@ func NewTopology(lg *zap.Logger) *RaftGroupTopology {
 	}
 }
 
-func (t *RaftGroupTopology) SetID(peerID types.ID) {
+func (t *RaftGroupTopology) SetPeerID(peerID types.ID) {
 	t.peerID = peerID
 }
 
@@ -172,7 +172,6 @@ func (t *RaftGroupTopology) Marshal() []byte {
 
 	p := &RaftGroupTopologyPersistStructure{
 		GroupID: t.groupID,
-		PeerID:  t.peerID,
 		Members: t.members,
 	}
 	for r, _ := range t.removed {
@@ -191,7 +190,6 @@ func (t *RaftGroupTopology) Recovery(data []byte) error {
 
 	t.Lock()
 	t.groupID = p.GroupID
-	t.peerID = p.PeerID
 	t.members = p.Members
 
 	for i := range p.Removed {
@@ -206,7 +204,6 @@ func (t *RaftGroupTopology) Recovery(data []byte) error {
 // persist structure
 type RaftGroupTopologyPersistStructure struct {
 	GroupID uint64               `json:"group_id"`
-	PeerID  types.ID             `json:"peer_id"`
 	Members map[types.ID]*Member `json:"members"`
 	Removed []types.ID           `json:"removed"`
 }

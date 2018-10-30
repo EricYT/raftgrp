@@ -127,7 +127,7 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 
 		topology = NewTopology(cfg.Logger)
 		topology.SetGroupID(cfg.GID)
-		topology.SetID(types.ID(peerID))
+		topology.SetPeerID(types.ID(peerID))
 
 		storageBackend = store.NewStorage(cfg.Logger, cfg.LogDir(), ss)
 		n = startNode(cfg, peerID, nil, storageBackend)
@@ -151,7 +151,7 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 			return nil, err
 		}
 		topology.SetGroupID(cfg.GID)
-		topology.SetID(types.ID(cfg.ID))
+		topology.SetPeerID(types.ID(cfg.ID))
 
 		storageBackend = store.NewStorage(cfg.Logger, cfg.LogDir(), ss)
 		n = startNode(cfg, peerID, topology.Members(), storageBackend)
@@ -171,6 +171,9 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 			return nil, err
 		}
 
+		// FIXME: We use snapshot and entries after this snapshot to recover cluster
+		// topology, because we don't set applied index directly. So last status
+		// can be recovered from snapshot and entries.
 		topology = NewTopology(cfg.Logger)
 		if snapshot != nil {
 			if err := topology.Recovery(snapshot.Data); err != nil {
@@ -183,6 +186,10 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 				return nil, err
 			}
 		}
+		// TODO: we haven't writen the information below into storage.
+		// But we have these information in our application.
+		topology.SetGroupID(cfg.GID)
+		topology.SetPeerID(types.ID(cfg.ID))
 
 		storageBackend = store.RestartStorage(cfg.Logger, cfg.LogDir(), snapshot, ss)
 		n = restartNode(cfg, peerID, storageBackend)
@@ -190,6 +197,10 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 	default:
 		return nil, errors.Errorf("[RaftGroup] unknow raft group start config")
 	}
+
+	cfg.Logger.Info("[RaftGroup] topology",
+		zap.String("topology", string(topology.Marshal())),
+	)
 
 	heartbeat := time.Duration(cfg.TickMs) * time.Millisecond
 
@@ -701,6 +712,14 @@ func (g *RaftGroup) snapshot(snapi uint64, cs raftpb.ConfState) {
 	lg := g.getLogger()
 
 	metadata := g.topology.Marshal()
+
+	lg.Info("[RaftGroup] snapshot",
+		zap.Uint64("group-id", g.groupID),
+		zap.String("local-id", g.peerID.String()),
+		zap.Uint64("snapshot-index", snapi),
+		zap.String("metadata", string(metadata)),
+	)
+
 	snapshot, err := g.r.storage.CreateSnapshot(snapi, &cs, metadata)
 	if err != nil {
 		lg.Fatal("[RaftGroup] snapshot create failed",
