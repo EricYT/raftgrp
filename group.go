@@ -131,6 +131,8 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 
 		storageBackend = store.NewStorage(cfg.Logger, cfg.LogDir(), ss)
 		n = startNode(cfg, peerID, nil, storageBackend)
+		// FIXME: Etcd use any one in the peers to discovery the cluster topology.
+		// What should we do? Just using peers act as remote peers for now.
 
 	case !haveStorage && cfg.NewCluster:
 		cfg.Logger.Info("[RaftGroup] creating a new raft group",
@@ -184,6 +186,7 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 
 		storageBackend = store.RestartStorage(cfg.Logger, cfg.LogDir(), snapshot, ss)
 		n = restartNode(cfg, peerID, storageBackend)
+
 	default:
 		return nil, errors.Errorf("[RaftGroup] unknow raft group start config")
 	}
@@ -306,12 +309,11 @@ func (g *RaftGroup) renderMessage(ms []raftpb.Message) ([]raftpb.Message, error)
 		ents := make([]raftpb.Entry, 0, len(m.Entries))
 		for j := range m.Entries {
 			entry := m.Entries[j]
+			ents = append(ents, entry)
 			if entry.Type != raftpb.EntryNormal {
-				ents = append(ents, entry)
 				continue
 			}
 			if entry.Data == nil || len(entry.Data) == 0 {
-				ents = append(ents, entry)
 				continue
 			}
 
@@ -328,7 +330,6 @@ func (g *RaftGroup) renderMessage(ms []raftpb.Message) ([]raftpb.Message, error)
 				continue
 			}
 			entry.Data = data
-			ents = append(ents, entry)
 		}
 		m.Entries = ents
 	}
@@ -353,6 +354,8 @@ func (g *RaftGroup) Process(ctx context.Context, m *raftpb.Message) error {
 					continue
 				}
 
+				// FIXME: No side effect will occur when we modify
+				// m.Entries[i].Data from receiving messages.
 				data, err := g.fsm.ProcessMessage(entry.Data)
 				if err != nil {
 					lg.Warn("[RaftGroup] process message failed",
