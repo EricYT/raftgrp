@@ -20,9 +20,7 @@ type Storage interface {
 	//ApplySnapshot overwrites the contents of this Storage object with
 	//those of then given snapshot
 	ApplySnapshot(snap raftpb.Snapshot) error
-	// Append the new entries to storage.
 	Append(entries []raftpb.Entry) error
-
 	CreateSnapshot(snapi uint64, cs *raftpb.ConfState, data []byte) (snap raftpb.Snapshot, err error)
 	Compact(compacti uint64) error
 
