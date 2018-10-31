@@ -88,6 +88,7 @@ func NewLevelDBBackend(lg *zap.Logger, dir string) (*leveldbBackend, error) {
 
 	sdir := path.Join(dir, snapshotDirPrefix)
 	if err := fileutil.TouchDirAll(sdir); err != nil {
+		db.Close()
 		return nil, errors.Wrapf(err, "[NewLevelDBBackend] touch snapshot directory %s failed.", sdir)
 	}
 
@@ -111,7 +112,7 @@ func NewLevelDBBackend(lg *zap.Logger, dir string) (*leveldbBackend, error) {
 
 	if err := lb.initializeState(); err != nil {
 		db.Close()
-		return nil, err
+		return nil, errors.Wrap(err, "[NewLevelDBBackend] initialize state failed")
 	}
 
 	return lb, nil
@@ -183,8 +184,17 @@ func (lb *leveldbBackend) Entries(lo, hi, maxSize uint64) ([]raftpb.Entry, error
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
+	lb.lg.Debug("[leveldbBackend] fetch entries",
+		zap.Uint64("dummy-index", lb.index),
+		zap.Uint64("dummy-term", lb.index),
+		zap.Uint64("count", lb.count),
+		zap.Uint64("low", lo),
+		zap.Uint64("high", hi),
+		zap.Uint64("max-size", maxSize),
+	)
+
 	offset := lb.index
-	if lo < offset {
+	if lo <= offset {
 		return nil, raft.ErrCompacted
 	}
 	if hi > lb.lastIndex()+1 {
@@ -208,6 +218,16 @@ func (lb *leveldbBackend) Entries(lo, hi, maxSize uint64) ([]raftpb.Entry, error
 		return nil, err
 	}
 
+	lb.lg.Debug("[leveldbBackend] fetch from db",
+		zap.Uint64("dummy-index", lb.index),
+		zap.Uint64("dummy-term", lb.index),
+		zap.Uint64("count", lb.count),
+		zap.Uint64("low", lo),
+		zap.Uint64("high", hi),
+		zap.Uint64("max-size", maxSize),
+		zap.Any("entries", ents),
+	)
+
 	return limitSize(ents, maxSize), nil
 }
 
@@ -217,7 +237,7 @@ func limitSize(ents []raftpb.Entry, maxsize uint64) []raftpb.Entry {
 	}
 	size := ents[0].Size()
 	var limit int
-	for limit := 1; limit < len(ents); limit++ {
+	for limit = 1; limit < len(ents); limit++ {
 		size += ents[limit].Size()
 		if uint64(size) > maxsize {
 			break
@@ -282,13 +302,13 @@ func (lb *leveldbBackend) getEntries(lo, hi uint64) ([]raftpb.Entry, error) {
 	iter := lb.db.NewIterator(nil, nil)
 	defer iter.Release()
 
+	lb.lg.Debug("[leveldbBackend] get entries",
+		zap.Uint64("index-low", lo),
+		zap.Uint64("index-high", hi),
+	)
+
 	ents := make([]raftpb.Entry, 0, hi-lo)
 	for ok := iter.Seek(lb.encodeEntryKey(lo)); ok; ok = iter.Next() {
-
-		lb.lg.Debug("[leveldbBackend] iter entries",
-			zap.String("key", string(iter.Key())),
-			zap.String("val", string(iter.Value())),
-		)
 
 		key := iter.Key()
 		i, err := lb.decodeEntryKey(key)
@@ -301,6 +321,12 @@ func (lb *leveldbBackend) getEntries(lo, hi uint64) ([]raftpb.Entry, error) {
 		if i >= hi {
 			break
 		}
+
+		lb.lg.Debug("[leveldbBackend] iter entries",
+			zap.String("key", string(iter.Key())),
+			zap.String("val", string(iter.Value())),
+		)
+
 		var e raftpb.Entry
 		if err := e.Unmarshal(iter.Value()); err != nil {
 			return nil, err
@@ -386,6 +412,11 @@ func (lb *leveldbBackend) saveEntries(ents []raftpb.Entry) error {
 		if err != nil {
 			return errors.Wrapf(err, "[leveldbBackend] marshal entry %d failed", ents[i].Index)
 		}
+		lb.lg.Debug("[leveldbBackend] save entry",
+			zap.Uint64("index", ents[i].Index),
+			zap.Uint64("term", ents[i].Term),
+			zap.String("index", string(ikey)),
+		)
 		batch.Put(ikey, val)
 	}
 	offset := ents[0].Index - lb.index
