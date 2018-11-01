@@ -544,18 +544,15 @@ func (lb *leveldbBackend) CreateSnapshot(i uint64, cs *raftpb.ConfState, data []
 		return raftpb.Snapshot{}, err
 	}
 
-	sp := raftpb.Snapshot{
-		Metadata: raftpb.SnapshotMetadata{
-			Term:  term,
-			Index: i,
-		},
-		Data: data,
-	}
+	lb.snap.Data = data
+	lb.snap.Metadata.Term = term
+	lb.snap.Metadata.Index = i
+
 	if cs != nil {
-		sp.Metadata.ConfState = *cs
+		lb.snap.Metadata.ConfState = *cs
 	}
 
-	return sp, nil
+	return lb.snap, nil
 }
 
 // just save a snapshot time-of-point
@@ -563,16 +560,10 @@ func (lb *leveldbBackend) SaveSnap(snap raftpb.Snapshot) error {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
-	if lb.snap.Metadata.Index >= snap.Metadata.Index {
-		return raft.ErrSnapOutOfDate
-	}
-
 	// save snapshot
 	if err := lb.ss.SaveSnap(snap); err != nil {
 		return err
 	}
-
-	lb.snap = snap
 
 	return nil
 }
