@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"path"
 	"strconv"
 	"sync"
 
@@ -76,7 +75,19 @@ type leveldbBackend struct {
 }
 
 func NewLevelDBBackend(lg *zap.Logger, dir string) (*leveldbBackend, error) {
-	dbdir := path.Join(dir, leveldbDirPrefix)
+	// reloading snapshot firstly
+	sdir := genSnapshotDirPath(dir, snapshotDirPrefix)
+	if err := fileutil.TouchDirAll(sdir); err != nil {
+		return nil, errors.Wrapf(err, "[NewLevelDBBackend] touch snapshot directory %s failed.", sdir)
+	}
+	ss := snap.New(lg, sdir)
+	snapshot, err := ss.Load()
+	if err != nil && err != snap.ErrNoSnapshot {
+		return nil, errors.Wrapf(err, "[NewLevelDBBackend] load snapshot %s failed.", sdir)
+	}
+
+	// using snapshot to detect db directory
+	dbdir := genStoreDirPath(dir, leveldbDirPrefix)
 	lg.Info("[NewLevelDBBackend]",
 		zap.String("dir", dir),
 		zap.String("leveldb-dir", dbdir),
@@ -84,19 +95,6 @@ func NewLevelDBBackend(lg *zap.Logger, dir string) (*leveldbBackend, error) {
 	db, err := leveldb.OpenFile(dbdir, nil)
 	if err != nil {
 		return nil, errors.Wrapf(err, "[NewLevelDBBackend] open db file %s failed.", dbdir)
-	}
-
-	sdir := path.Join(dir, snapshotDirPrefix)
-	if err := fileutil.TouchDirAll(sdir); err != nil {
-		db.Close()
-		return nil, errors.Wrapf(err, "[NewLevelDBBackend] touch snapshot directory %s failed.", sdir)
-	}
-
-	ss := snap.New(lg, sdir)
-	snapshot, err := ss.Load()
-	if err != nil && err != snap.ErrNoSnapshot {
-		db.Close()
-		return nil, errors.Wrapf(err, "[NewLevelDBBackend] load snapshot %s failed.", sdir)
 	}
 
 	lb := &leveldbBackend{
@@ -249,7 +247,10 @@ func limitSize(ents []raftpb.Entry, maxsize uint64) []raftpb.Entry {
 func (lb *leveldbBackend) Term(i uint64) (uint64, error) {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
+	return lb.getTerm(i)
+}
 
+func (lb *leveldbBackend) getTerm(i uint64) (uint64, error) {
 	offset := lb.index
 	if i < offset {
 		return 0, raft.ErrCompacted
@@ -282,6 +283,7 @@ func (lb *leveldbBackend) getEntry(i uint64) (*raftpb.Entry, error) {
 }
 
 func (lb *leveldbBackend) encodeEntryKey(i uint64) []byte {
+	// NOTICE: padding zero to make iter keys by it's index.
 	return []byte(fmt.Sprintf("%s#%020d", entryPrefix, i))
 }
 
@@ -365,6 +367,55 @@ func (lb *leveldbBackend) Snapshot() (raftpb.Snapshot, error) {
 }
 
 // backend persist methods
+// Original method Compact discards all log entries prior to compactIndex.
+// FIXME: just pushing the index forward
+func (lb *leveldbBackend) Compact(compactIndex uint64) error {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+
+	offset := lb.index
+	if compactIndex <= offset {
+		return raft.ErrCompacted
+	}
+
+	if compactIndex > lb.lastIndex() {
+		lb.lg.Fatal("[leveldbBackend] compact out of index bound",
+			zap.Uint64("compact-index", compactIndex),
+			zap.Uint64("last-index", lb.lastIndex()),
+		)
+	}
+
+	term, err := lb.getTerm(compactIndex)
+	if err != nil {
+		return err
+	}
+
+	newcount := lb.count - (compactIndex - lb.index)
+
+	// modify persist layer
+	dummye := &raftpb.Entry{
+		Term:  term,
+		Index: compactIndex,
+	}
+	data, err := dummye.Marshal()
+	if err != nil {
+		return err
+	}
+
+	batch := new(leveldb.Batch)
+	batch.Put(dumpEntryPrefix, data)
+	batch.Put(entryCountPrefix, []byte(fmt.Sprintf("%d", newcount)))
+	if err := lb.db.Write(batch, nil); err != nil {
+		return err
+	}
+
+	lb.index = compactIndex
+	lb.term = term
+	lb.count = newcount
+
+	return nil
+}
+
 // Write entries, hard state in order.
 func (lb *leveldbBackend) Save(st raftpb.HardState, ents []raftpb.Entry) error {
 	lb.mu.Lock()
@@ -458,7 +509,62 @@ func (lb *leveldbBackend) saveHardState(st *raftpb.HardState) error {
 	return nil
 }
 
+// create a snapshot, but we didn't modify the leveldbBackend state right now
+func (lb *leveldbBackend) CreateSnapshot(i uint64, cs *raftpb.ConfState, data []byte) (raftpb.Snapshot, error) {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+
+	if i <= lb.snap.Metadata.Index {
+		return raftpb.Snapshot{}, raft.ErrSnapOutOfDate
+	}
+
+	if i > lb.lastIndex() {
+		lb.lg.Fatal("[leveldbBackend] snapshot is out of bound",
+			zap.Uint64("snapshot-index", i),
+			zap.Uint64("last-index", lb.lastIndex()),
+		)
+	}
+
+	term, err := lb.getTerm(i)
+	if err != nil {
+		return raftpb.Snapshot{}, err
+	}
+
+	sp := raftpb.Snapshot{
+		Metadata: raftpb.SnapshotMetadata{
+			Term:  term,
+			Index: i,
+		},
+		Data: data,
+	}
+	if cs != nil {
+		sp.Metadata.ConfState = *cs
+	}
+
+	return sp, nil
+}
+
+// just save a snapshot time-of-point
 func (lb *leveldbBackend) SaveSnap(snap raftpb.Snapshot) error {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+
+	if lb.snap.Metadata.Index >= snap.Metadata.Index {
+		return raft.ErrSnapOutOfDate
+	}
+
+	// save snapshot
+	if err := lb.ss.SaveSnap(snap); err != nil {
+		return err
+	}
+
+	lb.snap = snap
+
+	return nil
+}
+
+// install remote snapshot and discard all entries before.
+func (lb *leveldbBackend) ApplySnapshot(snap raftpb.Snapshot) error {
 	// FIXME: We must to discard all entries before the snapshot.
 	// The easy way it to generate a new leveldb instance by the specific snap.Metadata.Term
 	// and snap.Metadata.Index, but I think its too heavy to do that.
@@ -472,35 +578,38 @@ func (lb *leveldbBackend) SaveSnap(snap raftpb.Snapshot) error {
 		return raft.ErrSnapOutOfDate
 	}
 
-	// cleanup old raft logs
-	// FIXME: We can generate a new dir by snapshot index and term,
-	// so we can keep the old one.
+	// close current leveldb
 	if err := lb.db.Close(); err != nil {
 		lb.lg.Fatal("[leveldbBackend] save snapshot close leveldb failed.",
 			zap.Error(err),
 		)
 	}
-	dbdir := path.Join(lb.dir, leveldbDirPrefix)
-	if err := os.RemoveAll(dbdir); err != nil {
-		lb.lg.Fatal("[leveldbBackend] remove old leveldb failed.",
-			zap.Error(err),
+
+	// backup the old logs
+	dbdir := genStoreDirPath(lb.dir, leveldbDirPrefix)
+	backupDbDir := fmt.Sprintf("%s-%d-%d-backup", dbdir, lb.snap.Metadata.Term, lb.snap.Metadata.Index)
+	if err := os.Rename(dbdir, backupDbDir); err != nil {
+		lb.lg.Fatal("[leveldbBackend] backup leveldb failed.",
+			zap.Uint64("term", lb.snap.Metadata.Term),
+			zap.Uint64("index", lb.snap.Metadata.Index),
+			zap.String("db-dir", dbdir),
+			zap.String("backup-db-dir", backupDbDir),
 		)
 	}
 
+	// create a new backend
 	db, err := leveldb.OpenFile(dbdir, nil)
 	if err != nil {
 		return err
 	}
 
 	lb.lg.Info("[leveldbBackend] save snapshot",
+		zap.String("db-dir", dbdir),
 		zap.Uint64("term", snap.Metadata.Term),
 		zap.Uint64("index", snap.Metadata.Index),
 	)
 
-	// save snapshot
-	if err := lb.ss.SaveSnap(snap); err != nil {
-		return err
-	}
+	lb.snap = snap
 
 	lb.db = db
 	lb.index = snap.Metadata.Index

@@ -196,12 +196,12 @@ func TestStorageFirstIndex(t *testing.T) {
 		t.Errorf("first = %d, want %d", first, 4)
 	}
 
-	//s.Compact(4)
-	//first, err = s.FirstIndex()
-	//if err != nil {
-	//	t.Errorf("err = %v, want nil", err)
-	//}
-	//if first != 5 {
-	//	t.Errorf("first = %d, want %d", first, 5)
-	//}
+	backend.Compact(4)
+	first, err = backend.FirstIndex()
+	if err != nil {
+		t.Errorf("err = %v, want nil", err)
+	}
+	if first != 5 {
+		t.Errorf("first = %d, want %d", first, 5)
+	}
 }
