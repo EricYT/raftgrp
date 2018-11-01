@@ -640,8 +640,7 @@ func (lb *leveldbBackend) Close() error {
 }
 
 func leveldbExist(dir string) bool {
-	dbdir := genStoreDirPath(dir, leveldbDirPrefix)
-	f, err := os.Open(dbdir)
+	f, err := os.Open(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false

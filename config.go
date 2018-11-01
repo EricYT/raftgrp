@@ -35,12 +35,8 @@ func (g GroupConfig) MemberDir() string {
 }
 
 // TODO: contact gid
-func (g GroupConfig) LogDir() string {
-	return filepath.Join(g.MemberDir(), "log")
-}
-
-func (g GroupConfig) SnapDir() string {
-	return filepath.Join(g.MemberDir(), "snap")
+func (g GroupConfig) RaftDir() string {
+	return filepath.Join(g.MemberDir(), "raft")
 }
 
 func (g GroupConfig) peerDialTimeout() time.Duration {

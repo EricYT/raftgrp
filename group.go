@@ -100,7 +100,7 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 		topology *RaftGroupTopology
 	)
 
-	haveStorage := store.HaveStorage(store.StorageTypeLevelDB, cfg.LogDir())
+	haveStorage := store.HaveStorage(store.StorageTypeLevelDB, cfg.RaftDir())
 
 	peerID = cfg.ID
 
@@ -115,7 +115,7 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 		topology.SetGroupID(cfg.GID)
 		topology.SetPeerID(types.ID(peerID))
 
-		storageBackend = store.NewStorageLeveldb(cfg.Logger, cfg.LogDir())
+		storageBackend = store.NewStorageLeveldb(cfg.Logger, cfg.RaftDir())
 		n = startNode(cfg, peerID, nil, storageBackend)
 		// FIXME: Etcd use any one in the peers to discovery the cluster topology.
 		// What should we do? Just using peers act as remote peers for now.
@@ -139,7 +139,7 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 		topology.SetGroupID(cfg.GID)
 		topology.SetPeerID(types.ID(cfg.ID))
 
-		storageBackend = store.NewStorageLeveldb(cfg.Logger, cfg.LogDir())
+		storageBackend = store.NewStorageLeveldb(cfg.Logger, cfg.RaftDir())
 		n = startNode(cfg, peerID, topology.Members(), storageBackend)
 
 	case haveStorage:
@@ -152,7 +152,7 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 			return nil, errors.Errorf("cannot write to member directory: %v", err)
 		}
 
-		storageBackend = store.NewStorageLeveldb(cfg.Logger, cfg.LogDir())
+		storageBackend = store.NewStorageLeveldb(cfg.Logger, cfg.RaftDir())
 
 		snapshot, err = storageBackend.Snapshot()
 		if err != nil && err != snap.ErrNoSnapshot {
