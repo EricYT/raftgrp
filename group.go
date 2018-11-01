@@ -73,9 +73,6 @@ type RaftGroup struct {
 
 	errorc chan error
 
-	// FIXME: not replace it right now
-	snapshotter *snap.Snapshotter
-
 	// wgMu blocks concurrent waitgroup mutation while server stopping
 	wgMu sync.RWMutex
 	wg   sync.WaitGroup
@@ -95,26 +92,15 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 	var (
 		n raft.Node
 
-		// TODO: leave it alone right now
-		snapshot *raftpb.Snapshot
+		snapshot raftpb.Snapshot
 
-		// FIXME:
 		storageBackend store.Storage
 
 		peerID   uint64
 		topology *RaftGroupTopology
 	)
 
-	// TODO: snapshot interfaces
-	if err = fileutil.TouchDirAll(cfg.SnapDir()); err != nil {
-		cfg.Logger.Fatal("failed to create snapshot directory",
-			zap.String("path", cfg.SnapDir()),
-			zap.Error(err))
-	}
-	ss := snap.New(cfg.Logger, cfg.SnapDir())
-	// end
-
-	haveStorage := store.HaveStorage(cfg.LogDir())
+	haveStorage := store.HaveStorage(store.StorageTypeLevelDB, cfg.LogDir())
 
 	peerID = cfg.ID
 
@@ -129,7 +115,7 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 		topology.SetGroupID(cfg.GID)
 		topology.SetPeerID(types.ID(peerID))
 
-		storageBackend = store.NewStorage(cfg.Logger, cfg.LogDir(), ss)
+		storageBackend = store.NewStorageLeveldb(cfg.Logger, cfg.LogDir())
 		n = startNode(cfg, peerID, nil, storageBackend)
 		// FIXME: Etcd use any one in the peers to discovery the cluster topology.
 		// What should we do? Just using peers act as remote peers for now.
@@ -153,7 +139,7 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 		topology.SetGroupID(cfg.GID)
 		topology.SetPeerID(types.ID(cfg.ID))
 
-		storageBackend = store.NewStorage(cfg.Logger, cfg.LogDir(), ss)
+		storageBackend = store.NewStorageLeveldb(cfg.Logger, cfg.LogDir())
 		n = startNode(cfg, peerID, topology.Members(), storageBackend)
 
 	case haveStorage:
@@ -166,7 +152,9 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 			return nil, errors.Errorf("cannot write to member directory: %v", err)
 		}
 
-		snapshot, err = ss.Load()
+		storageBackend = store.NewStorageLeveldb(cfg.Logger, cfg.LogDir())
+
+		snapshot, err = storageBackend.Snapshot()
 		if err != nil && err != snap.ErrNoSnapshot {
 			return nil, err
 		}
@@ -175,7 +163,7 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 		// topology, because we don't set applied index directly. So last status
 		// can be recovered from snapshot and entries.
 		topology = NewTopology(cfg.Logger)
-		if snapshot != nil {
+		if !raft.IsEmptySnap(snapshot) {
 			if err := topology.Recovery(snapshot.Data); err != nil {
 				cfg.Logger.Error("[RaftGroup] recover topology from snapshot failed.",
 					zap.Uint64("group-id", cfg.GID),
@@ -191,7 +179,6 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 		topology.SetGroupID(cfg.GID)
 		topology.SetPeerID(types.ID(cfg.ID))
 
-		storageBackend = store.RestartStorage(cfg.Logger, cfg.LogDir(), snapshot, ss)
 		n = restartNode(cfg, peerID, storageBackend)
 
 	default:
@@ -205,11 +192,10 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 	heartbeat := time.Duration(cfg.TickMs) * time.Millisecond
 
 	grp = &RaftGroup{
-		Cfg:         cfg,
-		lgMu:        new(sync.RWMutex),
-		lg:          cfg.Logger,
-		errorc:      make(chan error, 1),
-		snapshotter: ss,
+		Cfg:    cfg,
+		lgMu:   new(sync.RWMutex),
+		lg:     cfg.Logger,
+		errorc: make(chan error, 1),
 		r: *newRaftNode(
 			raftNodeConfig{
 				lg:          cfg.Logger,

@@ -111,8 +111,11 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					if err := r.storage.ApplySnapshot(rd.Snapshot); err != nil {
 						r.lg.Fatal("failed to apply snapshot", zap.Error(err))
 					}
+					// FIXME: try to replay entries again after saving snapshot
+					if err := r.storage.Append(rd.Entries); err != nil {
+						r.lg.Fatal("failed to apply entries", zap.Error(err))
+					}
 				}
-				r.storage.Append(rd.Entries)
 
 				// try to send messages to others
 				r.transport.Send(r.processMessages(rd.Messages))

@@ -3,6 +3,7 @@ package backend
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"sync"
@@ -259,6 +260,10 @@ func (lb *leveldbBackend) getTerm(i uint64) (uint64, error) {
 		return 0, raft.ErrUnavailable
 	}
 
+	if i == lb.index {
+		return lb.term, nil
+	}
+
 	e, err := lb.getEntry(i)
 	if err != nil {
 		return 0, err
@@ -367,6 +372,15 @@ func (lb *leveldbBackend) Snapshot() (raftpb.Snapshot, error) {
 }
 
 // backend persist methods
+
+// Append try to replay entries again when there is a remote snapshot
+// have to operate.
+func (lb *leveldbBackend) Append(ents []raftpb.Entry) error {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	return lb.saveEntries(ents)
+}
+
 // Original method Compact discards all log entries prior to compactIndex.
 // FIXME: just pushing the index forward
 func (lb *leveldbBackend) Compact(compactIndex uint64) error {
@@ -619,8 +633,42 @@ func (lb *leveldbBackend) ApplySnapshot(snap raftpb.Snapshot) error {
 	return nil
 }
 
-func (lb *leveldbBackend) Close() {
+func (lb *leveldbBackend) Close() error {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
-	lb.db.Close()
+	return lb.db.Close()
+}
+
+func leveldbExist(dir string) bool {
+	dbdir := genStoreDirPath(dir, leveldbDirPrefix)
+	f, err := os.Open(dbdir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false
+		}
+		panic(fmt.Sprintf("have leveldb open dir %s failed. %s", dir, err))
+	}
+	defer f.Close()
+
+	stat, err := f.Stat()
+	if err != nil {
+		panic(fmt.Sprintf("state leveldb dir %s failed. %s", dir, err))
+	}
+	if !stat.IsDir() {
+		return false
+	}
+
+	ents, err := f.Readdir(0)
+	if err != nil {
+		panic(fmt.Sprintf("read leveldb dir %s failed. %s", dir, err))
+	}
+	for _, e := range ents {
+		n := e.Name()
+		log.Printf("[leveldbExist] dir: %s name: %s isdir: %v", dir, n, e.IsDir())
+		if e.IsDir() && n == "log" {
+			return true
+		}
+	}
+
+	return false
 }
