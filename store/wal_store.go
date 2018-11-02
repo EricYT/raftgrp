@@ -4,6 +4,7 @@ import (
 	"io"
 
 	"go.etcd.io/etcd/etcdserver/api/snap"
+	"go.etcd.io/etcd/pkg/fileutil"
 	"go.etcd.io/etcd/raft"
 	"go.etcd.io/etcd/raft/raftpb"
 	"go.etcd.io/etcd/wal"
@@ -12,19 +13,19 @@ import (
 	"go.uber.org/zap"
 )
 
-type storage struct {
+type walStorage struct {
 	*raft.MemoryStorage
 	*wal.WAL
 	*snap.Snapshotter
 }
 
-func newStorage(m *raft.MemoryStorage, w *wal.WAL, s *snap.Snapshotter) *storage {
-	return &storage{m, w, s}
+func newWALStorage(m *raft.MemoryStorage, w *wal.WAL, s *snap.Snapshotter) *walStorage {
+	return &walStorage{m, w, s}
 }
 
 // SaveSnap saves the snapshot to disk and release the locked
 // wal files since they will not be used.
-func (st *storage) SaveSnap(snap raftpb.Snapshot) error {
+func (st *walStorage) SaveSnap(snap raftpb.Snapshot) error {
 	walsnap := walpb.Snapshot{
 		Index: snap.Metadata.Index,
 		Term:  snap.Metadata.Term,
@@ -43,7 +44,7 @@ func (st *storage) SaveSnap(snap raftpb.Snapshot) error {
 	return nil
 }
 
-func (st *storage) CreateSnapshot(snapi uint64, cs *raftpb.ConfState, data []byte) (snap raftpb.Snapshot, err error) {
+func (st *walStorage) CreateSnapshot(snapi uint64, cs *raftpb.ConfState, data []byte) (snap raftpb.Snapshot, err error) {
 	snap, err = st.MemoryStorage.CreateSnapshot(snapi, cs, data)
 	if err != nil {
 		// the snapshot was done asynchronously with the progress of raft.
@@ -53,6 +54,11 @@ func (st *storage) CreateSnapshot(snapi uint64, cs *raftpb.ConfState, data []byt
 		}
 	}
 	return
+}
+
+// NOTICE: WAL just replay the ents into memory storage
+func (st *walStorage) Append(snap raftpb.Snapshot, ents []raftpb.Entry) (err error) {
+	return st.MemoryStorage.Append(ents)
 }
 
 func readWAL(lg *zap.Logger, waldir string, snap walpb.Snapshot) (w *wal.WAL, st raftpb.HardState, ents []raftpb.Entry) {
@@ -82,21 +88,42 @@ func readWAL(lg *zap.Logger, waldir string, snap walpb.Snapshot) (w *wal.WAL, st
 	return w, st, ents
 }
 
+func ensureWAL(lg *zap.Logger, waldir string) {
+	if !wal.Exist(waldir) {
+		// FIXME: Maybe we can put something into the wal metadata.
+		w, err := wal.Create(lg, waldir, nil)
+		if err != nil {
+			lg.Fatal("[walStorage] create wal directory error",
+				zap.String("wal-directory", waldir),
+				zap.Error(err),
+			)
+		}
+		w.Close()
+	}
+}
+
 // storage initialize functions
-func NewStorage(lg *zap.Logger, waldir string, ss *snap.Snapshotter) *storage {
-	w, err := wal.Create(lg, waldir, nil)
-	if err != nil {
-		lg.Fatal("[storage] create wal directory error",
-			zap.String("wal-directory", waldir),
+func NewWALStorage(lg *zap.Logger, waldir, snapdir string) *walStorage {
+	ensureWAL(lg, waldir)
+
+	// initialize snapshot dir
+	if err := fileutil.TouchDirAll(snapdir); err != nil {
+		lg.Fatal("[store] touch snapshot dir failed.",
+			zap.String("snap-dir", snapdir),
 			zap.Error(err),
 		)
 	}
-	ms := raft.NewMemoryStorage()
 
-	return newStorage(ms, w, ss)
-}
+	ss := snap.New(lg, snapdir)
+	snapshot, err := ss.Load()
+	if err != nil && err != snap.ErrNoSnapshot {
+		lg.Fatal("[store] load snapshot failed.",
+			zap.String("snap-dir", snapdir),
+			zap.Error(err),
+		)
+	}
 
-func RestartStorage(lg *zap.Logger, waldir string, snapshot *raftpb.Snapshot, ss *snap.Snapshotter) *storage {
+	// memory storage
 	walsnap := walpb.Snapshot{}
 	if snapshot != nil {
 		walsnap.Index, walsnap.Term = snapshot.Metadata.Index, snapshot.Metadata.Term
@@ -109,7 +136,7 @@ func RestartStorage(lg *zap.Logger, waldir string, snapshot *raftpb.Snapshot, ss
 	ms.SetHardState(st)
 	ms.Append(ents)
 
-	return newStorage(ms, w, ss)
+	return newWALStorage(ms, w, ss)
 }
 
 func haveWALBackend(dir string) bool {

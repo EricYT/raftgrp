@@ -95,12 +95,12 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					)
 				}
 
-				// intend to persist hardstate and entries
+				// persist hardstate and entries
 				if err := r.storage.Save(rd.HardState, rd.Entries); err != nil {
 					r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))
 				}
 
-				// intend to install snapshot
+				// install snapshot
 				if !raft.IsEmptySnap(rd.Snapshot) {
 					r.lg.Info("[raftNode] install snapshot.",
 						zap.Any("snap-metadata", rd.Snapshot.Metadata),
@@ -111,13 +111,16 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					if err := r.storage.ApplySnapshot(rd.Snapshot); err != nil {
 						r.lg.Fatal("failed to apply snapshot", zap.Error(err))
 					}
-					// FIXME: try to replay entries again after saving snapshot
-					if err := r.storage.Append(rd.Entries); err != nil {
-						r.lg.Fatal("failed to apply entries", zap.Error(err))
-					}
+				}
+				// FIXME: try to replay entries again after saving snapshot
+				// This interface behavior depends on what backend store
+				// we used.
+				if err := r.storage.Append(rd.Snapshot, rd.Entries); err != nil {
+					r.lg.Fatal("failed to apply entries", zap.Error(err))
 				}
 
-				// try to send messages to others
+				// send messages to others
+				// FIXME: this method can be operated parallel.
 				r.transport.Send(r.processMessages(rd.Messages))
 
 				// apply all

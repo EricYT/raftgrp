@@ -1,4 +1,4 @@
-package backend
+package leveldb
 
 import (
 	"log"
@@ -18,7 +18,7 @@ func TestEmptyLevelDBStart(t *testing.T) {
 	tmpdir := path.Join(os.TempDir(), "leveldb")
 	defer os.RemoveAll(tmpdir)
 
-	backend, err := NewLevelDBBackend(zap.NewExample(), tmpdir)
+	backend, err := NewLevelDBBackend(zap.NewExample(), path.Join(tmpdir, "log"), path.Join(tmpdir, "snap"))
 	assert.Nil(t, err)
 	defer backend.Close()
 
@@ -36,7 +36,7 @@ func TestSave(t *testing.T) {
 	defer os.RemoveAll(tmpdir)
 
 	// FIXME: use etcd MemoryStorage to check the validate results.
-	backend, err := NewLevelDBBackend(zap.NewExample(), tmpdir)
+	backend, err := NewLevelDBBackend(zap.NewExample(), path.Join(tmpdir, "log"), path.Join(tmpdir, "snap"))
 	assert.Nil(t, err)
 	defer backend.Close()
 
@@ -47,7 +47,7 @@ func TestStorageTerm(t *testing.T) {
 	defer os.RemoveAll(tmpdir)
 
 	// FIXME: use etcd MemoryStorage to check the validate results.
-	backend, err := NewLevelDBBackend(zap.NewExample(), tmpdir)
+	backend, err := NewLevelDBBackend(zap.NewExample(), path.Join(tmpdir, "log"), path.Join(tmpdir, "snap"))
 	assert.Nil(t, err)
 	defer backend.Close()
 
@@ -85,7 +85,7 @@ func TestStorageEntries(t *testing.T) {
 	defer os.RemoveAll(tmpdir)
 
 	// FIXME: use etcd MemoryStorage to check the validate results.
-	backend, err := NewLevelDBBackend(zap.NewExample(), tmpdir)
+	backend, err := NewLevelDBBackend(zap.NewExample(), path.Join(tmpdir, "log"), path.Join(tmpdir, "snap"))
 	assert.Nil(t, err)
 	defer backend.Close()
 
@@ -138,7 +138,7 @@ func TestStorageLastIndex(t *testing.T) {
 	defer os.RemoveAll(tmpdir)
 
 	// FIXME: use etcd MemoryStorage to check the validate results.
-	backend, err := NewLevelDBBackend(zap.NewExample(), tmpdir)
+	backend, err := NewLevelDBBackend(zap.NewExample(), path.Join(tmpdir, "log"), path.Join(tmpdir, "snap"))
 	assert.Nil(t, err)
 	defer backend.Close()
 
@@ -175,7 +175,7 @@ func TestStorageFirstIndex(t *testing.T) {
 	defer os.RemoveAll(tmpdir)
 
 	// FIXME: use etcd MemoryStorage to check the validate results.
-	backend, err := NewLevelDBBackend(zap.NewExample(), tmpdir)
+	backend, err := NewLevelDBBackend(zap.NewExample(), path.Join(tmpdir, "log"), path.Join(tmpdir, "snap"))
 	assert.Nil(t, err)
 	defer backend.Close()
 
