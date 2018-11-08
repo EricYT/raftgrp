@@ -67,6 +67,10 @@ type Storage interface {
 
 var _ raft.Storage = (*LeveldbBackend)(nil)
 
+// FIXME: What should we do for the recently entries have written,
+// Use a application LRU cache to store it, or handle it by the
+// backend leveldb block cache.
+
 type LeveldbBackend struct {
 	lg      *zap.Logger
 	logdir  string
