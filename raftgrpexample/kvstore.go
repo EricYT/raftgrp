@@ -10,6 +10,7 @@ import (
 
 	"github.com/EricYT/go-examples/utils/wait"
 	"github.com/EricYT/raftgrp"
+	"github.com/EricYT/raftgrp/transport"
 	"github.com/pkg/errors"
 	"go.etcd.io/etcd/pkg/types"
 )
@@ -125,7 +126,7 @@ func (kv *kvstore) Put(key string, val []byte) (err error) {
 	}
 }
 
-func (kv *kvstore) Apply(payload []byte) (err error) {
+func (kv *kvstore) OnApply(payload []byte) (err error) {
 	meta := &kvMeta{}
 	meta.Unmarshal(payload)
 
@@ -139,6 +140,41 @@ func (kv *kvstore) Apply(payload []byte) (err error) {
 	}
 
 	return nil
+}
+
+func (kv *kvstore) OnLeaderStart() {
+	log.Printf("[kvstore] I'm the king of jungle!")
+}
+
+func (kv *kvstore) OnLeaderStop() {
+	log.Printf("[kvstore] Gone with the wind.")
+}
+
+func (kv *kvstore) OnLeaderChange() {
+	log.Printf("[kvstore] A new king is born.")
+}
+
+func (kv *kvstore) OnError(err error) {
+	log.Fatalf("[kvstore] Go die. %v", err)
+}
+
+// snapshot
+func (kv *kvstore) OnSnapshotSave() (sr transport.SnapshotReader, err error) {
+	log.Printf("[kvstore]")
+
+	return
+}
+
+func (kv *kvstore) OnSnapshotLoad(sr transport.SnapshotReader) (err error) {
+	return
+}
+
+func (kv *kvstore) UnmarshalSnapshotParter(p []byte) (sp transport.SnapshotParter, err error) {
+	return
+}
+
+func (kv *kvstore) UnmarshalSnapshotReader(p []byte) (r transport.SnapshotReader, err error) {
+	return
 }
 
 // redering payload send to others

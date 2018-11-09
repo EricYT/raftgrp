@@ -4,7 +4,6 @@ import (
 	"log"
 
 	etransport "github.com/EricYT/raftgrp/transport"
-	"go.etcd.io/etcd/etcdserver/api/snap"
 	"go.etcd.io/etcd/pkg/types"
 	"go.etcd.io/etcd/raft/raftpb"
 	"go.uber.org/zap"
@@ -14,7 +13,6 @@ import (
 
 type Transporter interface {
 	Send(m []raftpb.Message)
-	SendSnapshot(m snap.Message)
 	AddPeer(id types.ID, urls []string)
 	RemovePeer(id types.ID)
 	RemoveAllPeers()

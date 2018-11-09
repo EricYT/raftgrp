@@ -39,7 +39,7 @@ func main() {
 	kv := newKvStore(grp)
 
 	// set fsm for grp
-	grp.SetFSM(kv)
+	grp.SetStateMachine(kv)
 
 	// serve http
 	serveHttpKVAPI(kv, *port)

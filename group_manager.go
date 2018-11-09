@@ -88,6 +88,27 @@ func (rm *RaftGroupManager) Process(ctx context.Context, gid uint64, m *raftpb.M
 	return ErrRaftGroupManagerNotFound
 }
 
+// snapshot methods
+func (rm *RaftGroupManager) UnmarshalSnapshotReader(ctx context.Context, gid uint64, p []byte) (etransport.SnapshotReader, error) {
+	rm.mu.RLock()
+	g, ok := rm.groups[gid]
+	rm.mu.RUnlock()
+	if !ok {
+		return nil, ErrRaftGroupManagerNotFound
+	}
+	return g.sm.UnmarshalSnapshotReader(p)
+}
+
+func (rm *RaftGroupManager) UnmarshalSnapshotParter(ctx context.Context, gid uint64, p []byte) (etransport.SnapshotParter, error) {
+	rm.mu.RLock()
+	g, ok := rm.groups[gid]
+	rm.mu.RUnlock()
+	if !ok {
+		return nil, ErrRaftGroupManagerNotFound
+	}
+	return g.sm.UnmarshalSnapshotParter(p)
+}
+
 func (rm *RaftGroupManager) NewRaftGroup(lg *zap.Logger, gid, id uint64, peers []string, newCluster bool) (*RaftGroup, error) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
