@@ -73,7 +73,7 @@ type Handler interface {
 	Process(ctx context.Context, gid uint64, m *raftpb.Message) error
 
 	// snapshot
-	UnmarshalSnapshotReader(ctx context.Context, gid uint64, p []byte) (SnapshotReader, error)
+	UnmarshalSnapshotWriter(ctx context.Context, gid uint64, p []byte) (SnapshotWriter, error)
 	UnmarshalSnapshotParter(ctx context.Context, gid uint64, p []byte) (SnapshotParter, error)
 }
 
@@ -171,7 +171,7 @@ func (rs *raftServer) SnapshotRead(req *proto.SnapshotReaderRequest, stream prot
 	}
 
 	rs.Logger.Debug("[raftServer] snapshot pater",
-		append(gidFields, zap.Any("metadata", parter.Meta))...,
+		append(gidFields, zap.Any("metadata", parter.Metadata()))...,
 	)
 
 	// create snapshot part reader
@@ -229,21 +229,21 @@ func (rs *raftServer) syncSnapshotFromLeader(gid uint64, m *raftpb.Message) (err
 		return err
 	}
 
-	snapReader, err := rs.hnd.UnmarshalSnapshotReader(context.TODO(), gid, snapMeta.StateMachineMeta)
+	snapWriter, err := rs.hnd.UnmarshalSnapshotWriter(context.TODO(), gid, snapMeta.UserStateMachineMeta)
 	if err != nil {
-		rs.Logger.Error("[raftServer] unmarshal snapshot reader failed.",
+		rs.Logger.Error("[raftServer] unmarshal snapshot writer failed.",
 			append(gidFields, zap.Error(err))...)
 		return err
 	}
 
 	rs.Logger.Debug("[raftServer] snapshot reader",
 		zap.Uint64("group-id", gid),
-		zap.String("snap-id", snapReader.GetID()),
-		zap.Any("metadata", snapReader.Meta),
+		zap.String("snap-id", snapWriter.GetID()),
+		zap.Any("metadata", snapWriter.Metadata()),
 	)
 
 	// read snapshot
-	parters := snapReader.Next()
+	parters := snapWriter.Next()
 	for parter := range parters {
 		parterPayload, err := parter.Marshal()
 		if err != nil {
@@ -256,7 +256,7 @@ func (rs *raftServer) syncSnapshotFromLeader(gid uint64, m *raftpb.Message) (err
 
 		rs.Logger.Debug("[raftServer] snapshot pater",
 			zap.Uint64("group-id", gid),
-			zap.String("snap-id", snapReader.GetID()),
+			zap.String("snap-id", snapWriter.GetID()),
 			zap.String("detail", string(parterPayload)),
 		)
 
@@ -264,7 +264,7 @@ func (rs *raftServer) syncSnapshotFromLeader(gid uint64, m *raftpb.Message) (err
 		if err != nil {
 			rs.Logger.Error("[raftServer] snapshot create part writer failed.",
 				zap.Uint64("group-id", gid),
-				zap.String("snap-id", snapReader.GetID()),
+				zap.String("snap-id", snapWriter.GetID()),
 				zap.Error(err),
 			)
 			return err

@@ -38,8 +38,8 @@ func main() {
 	log.Println("raft group start ok")
 	kv := newKvStore(grp)
 
-	// set fsm for grp
-	grp.SetStateMachine(kv)
+	// set usm for group
+	grp.SetUserStateMachine(kv)
 
 	// serve http
 	serveHttpKVAPI(kv, *port)

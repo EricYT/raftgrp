@@ -7,6 +7,7 @@ import (
 	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/EricYT/go-examples/utils/wait"
 	"github.com/EricYT/raftgrp"
@@ -160,21 +161,95 @@ func (kv *kvstore) OnError(err error) {
 
 // snapshot
 func (kv *kvstore) OnSnapshotSave() (sr transport.SnapshotReader, err error) {
-	log.Printf("[kvstore]")
+	log.Printf("[kvstore] on snapshot save\n")
 
-	return
+	snap := &transport.SnapshotFileBase{
+		ID:   "kvstore-test",
+		Meta: make(map[string]string),
+	}
+	snap.Dir = "./volume1"
+	snap.Meta["date"] = time.Now().Format(time.RFC1123)
+
+	snap.Directories = []*transport.Directory{
+		&transport.Directory{
+			Dir: "/blob",
+			Files: []*transport.File{
+				&transport.File{
+					Filename:  "/blob/foo.txt",
+					ParentDir: snap.Dir,
+				},
+				&transport.File{
+					Filename:  "/blob/foo-1.txt",
+					ParentDir: snap.Dir,
+				},
+			},
+		},
+		&transport.Directory{
+			Dir: "/meta",
+			Files: []*transport.File{
+				&transport.File{
+					Filename:  "/meta/bar.txt",
+					ParentDir: snap.Dir,
+				},
+				&transport.File{
+					Filename:  "/meta/bar-1.txt",
+					ParentDir: snap.Dir,
+				},
+			},
+		},
+	}
+
+	return transport.NewSnapshotFileReader(snap), nil
 }
 
-func (kv *kvstore) OnSnapshotLoad(sr transport.SnapshotReader) (err error) {
-	return
+func (kv *kvstore) OnSnapshotLoad(sw transport.SnapshotWriter) (err error) {
+	log.Printf("[kvstore] on snapshot load\n")
+	err = sw.Commit()
+	if err != nil {
+		log.Printf("[kvstore] on snapshot load commit failed. %v\n", err)
+		return err
+	}
+	return nil
 }
 
+// FIXME: for leader view
 func (kv *kvstore) UnmarshalSnapshotParter(p []byte) (sp transport.SnapshotParter, err error) {
-	return
+	parter := transport.NewFile()
+	err = parter.Unmarshal(p)
+	if err != nil {
+		log.Printf("[kvstore] unmarshal parter(%s) failed. %v\n", string(p), err)
+		return nil, err
+	}
+
+	parter.SetParentDir("./volume1")
+
+	log.Printf("[kvstore] unmarshal snapshot file parter. parentDir: %s\n", parter.ParentDir)
+
+	return parter, err
 }
 
-func (kv *kvstore) UnmarshalSnapshotReader(p []byte) (r transport.SnapshotReader, err error) {
-	return
+// FIXME: for someone try to sync snapshot
+func (kv *kvstore) UnmarshalSnapshotWriter(p []byte) (r transport.SnapshotWriter, err error) {
+	filebase := transport.NewSnapshotFileBase()
+	err = filebase.Unmarshal(p)
+	if err != nil {
+		log.Printf("[kvstore] unmarshal snapshot file base(%s) failed. %v\n", string(p), err)
+		return nil, err
+	}
+
+	filewriter := transport.NewSnapshotFileWriter(filebase)
+
+	filewriter.SetTmpDir("./volume2/tmp")
+	filewriter.SetTargetDir("./volume2")
+
+	if err := filewriter.EnsureTmpDirectories(); err != nil {
+		log.Printf("[kvstore] ensure tmp directories failed. %v\n", err)
+		return nil, err
+	}
+
+	log.Printf("[kvstore] unmarshal snapshot file writer. dir: %s tmp: %s\n", filewriter.Dir, filewriter.TmpDir)
+
+	return filewriter, nil
 }
 
 // redering payload send to others

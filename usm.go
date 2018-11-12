@@ -2,9 +2,9 @@ package raftgrp
 
 import trans "github.com/EricYT/raftgrp/transport"
 
-// StateMachine is a bundle of methods the user
+// UserStateMachine is a bundle of methods the user
 // have to implement.
-type StateMachine interface {
+type UserStateMachine interface {
 	// RenderMessage rewrites messages before send them
 	// to peers
 	RenderMessage(payload []byte) (p []byte, err error)
@@ -34,11 +34,11 @@ type StateMachine interface {
 	OnSnapshotSave() (reader trans.SnapshotReader, err error)
 
 	// OnSnapshotLoad intent to install a new snapshot to local.
-	OnSnapshotLoad(reader trans.SnapshotReader) error
+	OnSnapshotLoad(writer trans.SnapshotWriter) error
 
-	// UnmarshalSnapshotReader parses snapshot from bytes to SnapshotReader
-	UnmarshalSnapshotReader(d []byte) (reader trans.SnapshotReader, err error)
+	// UnmarshalSnapshotWriter parses snapshot from bytes to SnapshotWriter for follower
+	UnmarshalSnapshotWriter(d []byte) (writer trans.SnapshotWriter, err error)
 
-	// UnmarshalSnapshotParter parse snapshot parter form bytes
+	// UnmarshalSnapshotParter parse snapshot parter form bytes for leader reading snapshots
 	UnmarshalSnapshotParter(d []byte) (parter trans.SnapshotParter, err error)
 }
