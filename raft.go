@@ -76,6 +76,16 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 	go func() {
 		defer r.onStop()
 
+		var err error
+		defer func() {
+			if err != nil {
+				r.lg.Error("[raftNode] raft node crashed",
+					zap.Error(err),
+				)
+				rh.onError(err)
+			}
+		}()
+
 		for {
 			select {
 			case <-r.ticker.C:
@@ -86,6 +96,7 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					r.td.Reset()
 				}
 
+				// FIXME:DEBUG
 				if !raft.IsEmptyHardState(rd.HardState) || len(rd.Entries) != 0 {
 					r.lg.Debug("[raftNode] hard state",
 						zap.Uint64("term", rd.HardState.Term),
@@ -96,8 +107,9 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 				}
 
 				// persist hardstate and entries
-				if err := r.storage.Save(rd.HardState, rd.Entries); err != nil {
-					r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))
+				if err = r.storage.Save(rd.HardState, rd.Entries); err != nil {
+					r.lg.Error("failed to save Raft hard state and entries", zap.Error(err))
+					return
 				}
 
 				// install snapshot
@@ -105,18 +117,21 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					r.lg.Info("[raftNode] install snapshot.",
 						zap.Any("snap-metadata", rd.Snapshot.Metadata),
 					)
-					if err := r.storage.SaveSnap(rd.Snapshot); err != nil {
-						r.lg.Fatal("failed to save Raft snapshot", zap.Error(err))
+					if err = r.storage.SaveSnap(rd.Snapshot); err != nil {
+						r.lg.Error("failed to save Raft snapshot", zap.Error(err))
+						return
 					}
-					if err := r.storage.ApplySnapshot(rd.Snapshot); err != nil {
-						r.lg.Fatal("failed to apply snapshot", zap.Error(err))
+					if err = r.storage.ApplySnapshot(rd.Snapshot); err != nil {
+						r.lg.Error("failed to apply snapshot", zap.Error(err))
+						return
 					}
 				}
 				// FIXME: try to replay entries again after saving snapshot
 				// This interface behavior depends on what backend store
-				// we used.
-				if err := r.storage.Append(rd.Snapshot, rd.Entries); err != nil {
-					r.lg.Fatal("failed to apply entries", zap.Error(err))
+				// we use.
+				if err = r.storage.Append(rd.Snapshot, rd.Entries); err != nil {
+					r.lg.Error("failed to apply entries", zap.Error(err))
+					return
 				}
 
 				// send messages to others
@@ -199,6 +214,7 @@ func startNode(cfg GroupConfig, id uint64, members []*Member, s store.Storage) (
 		MaxInflightMsgs:           maxInflightMsgs,
 		PreVote:                   cfg.PreVote,
 		DisableProposalForwarding: true,
+		CheckQuorum:               true,
 	}
 	n = raft.StartNode(c, peers)
 	return n
@@ -214,6 +230,7 @@ func restartNode(cfg GroupConfig, id uint64, s store.Storage) (n raft.Node) {
 		MaxInflightMsgs:           maxInflightMsgs,
 		PreVote:                   cfg.PreVote,
 		DisableProposalForwarding: true,
+		CheckQuorum:               true,
 	}
 	n = raft.RestartNode(c)
 	return n

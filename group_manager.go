@@ -22,7 +22,7 @@ var (
 
 const (
 	defaultTickMs                 int    = 1000
-	defaultElectionTicks          int    = 10
+	defaultElectionTicks          int    = 5
 	defaultSnapshotCount          uint64 = 10
 	defaultSnapshotCatchUpEntries uint64 = 5
 )
@@ -86,6 +86,27 @@ func (rm *RaftGroupManager) Process(ctx context.Context, gid uint64, m *raftpb.M
 		return g.Process(ctx, m)
 	}
 	return ErrRaftGroupManagerNotFound
+}
+
+// snapshot methods
+func (rm *RaftGroupManager) UnmarshalSnapshotWriter(ctx context.Context, gid uint64, p []byte) (etransport.SnapshotWriter, error) {
+	rm.mu.RLock()
+	g, ok := rm.groups[gid]
+	rm.mu.RUnlock()
+	if !ok {
+		return nil, ErrRaftGroupManagerNotFound
+	}
+	return g.usm.UnmarshalSnapshotWriter(p)
+}
+
+func (rm *RaftGroupManager) UnmarshalSnapshotParter(ctx context.Context, gid uint64, p []byte) (etransport.SnapshotParter, error) {
+	rm.mu.RLock()
+	g, ok := rm.groups[gid]
+	rm.mu.RUnlock()
+	if !ok {
+		return nil, ErrRaftGroupManagerNotFound
+	}
+	return g.usm.UnmarshalSnapshotParter(p)
 }
 
 func (rm *RaftGroupManager) NewRaftGroup(lg *zap.Logger, gid, id uint64, peers []string, newCluster bool) (*RaftGroup, error) {

@@ -20,12 +20,12 @@ type Transport interface {
 	// in peers, ignore it.
 	Send(m []raftpb.Message)
 
-	// SendSnapshot sends a snpathost ot peer.
-	SendSnapshot(m snap.Message)
-
 	AddPeer(id types.ID, urls []string)
 	RemovePeer(id types.ID)
 	RemoveAllPeers()
+
+	// Snapshot
+	WithClient(to types.ID, hnd func(ctx context.Context, client *Client) error) error
 }
 
 var _ Transport = (*transportV1)(nil)
@@ -69,9 +69,6 @@ func (t *transportV1) Send(m []raftpb.Message) {
 	}
 }
 
-func (t *transportV1) SendSnapshot(m snap.Message) {
-}
-
 func (t *transportV1) AddPeer(id types.ID, urls []string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -92,6 +89,17 @@ func (t *transportV1) RemoveAllPeers() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.peers = nil
+}
+
+// snapshot
+func (t *transportV1) WithClient(to types.ID, hnd func(ctx context.Context, c *Client) error) error {
+	t.mu.RLock()
+	peer, ok := t.peers[to]
+	t.mu.RUnlock()
+	if !ok {
+		return ErrTransportNotFound
+	}
+	return t.mgr.WithClient(peer.addr, hnd)
 }
 
 func (t *transportV1) Stop() {

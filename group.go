@@ -31,13 +31,6 @@ const (
 	backendStorage store.StorageType = store.StorageTypeLevelDB
 )
 
-// user fsm
-type FSM interface {
-	RenderMessage(payload []byte) (p []byte, err error)
-	ProcessMessage(payload []byte) (p []byte, err error)
-	Apply(payload []byte) (err error)
-}
-
 type RaftGrouper interface {
 	// Propose try to replicate a message to all followers.
 	// We can't try to delete it when user already cancel
@@ -47,7 +40,9 @@ type RaftGrouper interface {
 	// upstream to persist it.
 	Propose(ctx context.Context, payload []byte) error
 
+	// add a new member into the group
 	AddMember(ctx context.Context, m *Member) error
+	// remove a member from the group
 	RemoveMember(ctx context.Context, id uint64) error
 }
 
@@ -88,9 +83,9 @@ type RaftGroup struct {
 	leadTimeMu      sync.RWMutex
 	leadElectedTime time.Time
 
-	// user fms for processing data before sending to peers and
+	// user state machine for processing data before sending to peers and
 	// cutting data when receiving message.
-	fsm FSM
+	usm UserStateMachine
 }
 
 func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err error) {
@@ -168,8 +163,18 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 		// topology, because we don't set applied index directly. So last status
 		// can be recovered from snapshot and entries.
 		topology = NewTopology(cfg.Logger)
-		if !raft.IsEmptySnap(snapshot) {
-			if err := topology.Recovery(snapshot.Data); err != nil {
+		if !raft.IsEmptySnap(snapshot) && snapshot.Data != nil {
+			snapmeta := etransport.SnapshotMetadata{}
+			if err := snapmeta.Unmarshal(snapshot.Data); err != nil {
+				cfg.Logger.Error("[RaftGroup] unmarshal snapshot metadata failed.",
+					zap.Uint64("group-id", cfg.GID),
+					zap.Uint64("id", cfg.ID),
+					zap.Error(err),
+				)
+				return nil, err
+			}
+
+			if err := topology.Recovery(snapmeta.TopologyMeta); err != nil {
 				cfg.Logger.Error("[RaftGroup] recover topology from snapshot failed.",
 					zap.Uint64("group-id", cfg.GID),
 					zap.Uint64("id", cfg.ID),
@@ -242,8 +247,8 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 	return grp, nil
 }
 
-func (g *RaftGroup) SetFSM(fsm FSM) {
-	g.fsm = fsm
+func (g *RaftGroup) SetUserStateMachine(m UserStateMachine) {
+	g.usm = m
 }
 
 func (g *RaftGroup) getLogger() *zap.Logger {
@@ -325,7 +330,7 @@ func (g *RaftGroup) renderMessage(ms []raftpb.Message) ([]raftpb.Message, error)
 			// the shared entry in 'g.r.storage'. But we can
 			// use one data copy serve all same entry from
 			// .RenderMessage function.
-			data, err := g.fsm.RenderMessage(entry.Data)
+			data, err := g.usm.RenderMessage(entry.Data)
 			if err != nil {
 				lg.Warn("[RaftGroup] render message failed",
 					zap.Error(err),
@@ -364,7 +369,7 @@ func (g *RaftGroup) Process(ctx context.Context, m *raftpb.Message) error {
 
 				// FIXME: No side effect will occur when we modify
 				// m.Entries[i].Data from receiving messages.
-				data, err := g.fsm.ProcessMessage(entry.Data)
+				data, err := g.usm.ProcessMessage(entry.Data)
 				if err != nil {
 					lg.Warn("[RaftGroup] process message failed",
 						zap.Error(err),
@@ -408,7 +413,7 @@ func (g *RaftGroup) start() {
 type raftReadyHandler struct {
 	updateSoftState func(*raft.SoftState)
 	applyAll        func(raftpb.Snapshot, []raftpb.Entry) error
-	publishSnapshot func(snapshot raftpb.Snapshot) error
+	onError         func(err error)
 }
 
 func (g *RaftGroup) run() {
@@ -429,6 +434,7 @@ func (g *RaftGroup) run() {
 	rh := &raftReadyHandler{
 		updateSoftState: g.updateSoftState,
 		applyAll:        g.applyAll,
+		onError:         func(err error) { g.errorc <- err },
 	}
 	g.r.start(rh)
 
@@ -447,10 +453,13 @@ func (g *RaftGroup) run() {
 		close(g.done)
 	}()
 
+	// FIXME: Put applyAll into a FIFO scheduler queue to operate.
+
 	for {
 		select {
 		case err := <-g.errorc:
 			lg.Warn("[RaftGroup] server error", zap.Error(err))
+			g.usm.OnError(err)
 			return
 		case <-g.stop:
 			lg.Info("[RaftGroup] server shutdown")
@@ -462,9 +471,43 @@ func (g *RaftGroup) run() {
 // core
 func (g *RaftGroup) updateSoftState(s *raft.SoftState) {
 	lg := g.getLogger()
+
+	lg.Info("[RaftGroup] soft state update",
+		zap.Uint64("group-id", g.groupID),
+		zap.Uint64("peer-id", uint64(g.peerID)),
+		zap.String("current-role", s.RaftState.String()),
+		zap.Time("time", time.Now()),
+	)
+
+	if !g.IsLeader() && (s.Lead != raft.None && s.Lead == uint64(g.peerID)) {
+		lg.Debug("[RaftGroup] I'm leader now",
+			zap.Uint64("group-id", g.groupID),
+			zap.Uint64("peer-id", uint64(g.peerID)),
+			zap.Time("time", time.Now()),
+		)
+		g.usm.OnLeaderStart()
+	}
+
+	if g.IsLeader() && s.Lead != uint64(g.peerID) {
+		lg.Debug("[RaftGroup] I'm not leader now",
+			zap.Uint64("group-id", g.groupID),
+			zap.Uint64("peer-id", uint64(g.peerID)),
+			zap.String("current-role", s.RaftState.String()),
+			zap.Time("time", time.Now()),
+		)
+		g.usm.OnLeaderStop()
+	}
+
+	// TODO: notify leader changed
 	newLeader := s.Lead != raft.None && g.getLead() != s.Lead
 	if newLeader {
-		lg.Info("[RaftGroup] ", zap.Uint64("new-leader", s.Lead))
+		lg.Debug("[RaftGroup] Leader change",
+			zap.Uint64("group-id", g.groupID),
+			zap.Uint64("peer-id", uint64(g.peerID)),
+			zap.String("current-role", s.RaftState.String()),
+			zap.Time("time", time.Now()),
+		)
+		g.usm.OnLeaderChange()
 	}
 
 	if s.Lead == raft.None {
@@ -497,7 +540,7 @@ func (g *RaftGroup) applySnapshot(snap raftpb.Snapshot) error {
 	appliedi := g.getAppliedIndex()
 	snapi := g.getSnapshottedIndex()
 	if snap.Metadata.Index <= appliedi {
-		lg.Panic("[RaftGroup] unexpected leader snapshot from outdated index",
+		lg.Fatal("[RaftGroup] unexpected leader snapshot from outdated index",
 			zap.Uint64("current-snapshot-index", snapi),
 			zap.Uint64("current-applied-index", appliedi),
 			zap.Uint64("incoming-leader-index", snap.Metadata.Index),
@@ -505,13 +548,19 @@ func (g *RaftGroup) applySnapshot(snap raftpb.Snapshot) error {
 		)
 	}
 
-	// FIXME:
-	// callback user fsm to do something initialize
-
 	// TODO: recover group info by snapshot
 	if snap.Data != nil {
-		if err := g.topology.Recovery(snap.Data); err != nil {
-			lg.Panic("[RaftGroup] recovery from snapshot failed.",
+		snapmeta := etransport.SnapshotMetadata{}
+		if err := snapmeta.Unmarshal(snap.Data); err != nil {
+			lg.Fatal("[RaftGroup] unmarshal snapshot metadata failed.",
+				zap.Uint64("group-id", g.groupID),
+				zap.String("id", g.peerID.String()),
+				zap.Error(err),
+			)
+		}
+
+		if err := g.topology.Recovery(snapmeta.TopologyMeta); err != nil {
+			lg.Fatal("[RaftGroup] recovery from snapshot failed.",
 				zap.Uint64("group-id", g.groupID),
 				zap.String("id", g.peerID.String()),
 				zap.Error(err),
@@ -522,6 +571,26 @@ func (g *RaftGroup) applySnapshot(snap raftpb.Snapshot) error {
 				g.r.transport.AddPeer(m.ID, []string{m.Addr})
 			}
 		}
+
+		// FIXME:
+		// callback user sm to do something initialize
+		sw, err := g.usm.UnmarshalSnapshotWriter(snapmeta.UserStateMachineMeta)
+		if err != nil {
+			lg.Fatal("[RaftGroup] unmarshal snapshot failed.",
+				zap.Uint64("group-id", g.groupID),
+				zap.String("id", g.peerID.String()),
+				zap.Error(err),
+			)
+		}
+
+		if err := g.usm.OnSnapshotLoad(sw); err != nil {
+			lg.Fatal("[RaftGroup] on snapshot load failed",
+				zap.Uint64("group-id", g.groupID),
+				zap.String("peer-id", g.peerID.String()),
+				zap.Error(err),
+			)
+		}
+
 	}
 
 	g.setAppliedIndex(snap.Metadata.Index)
@@ -602,8 +671,8 @@ func (g *RaftGroup) applyEntryNormal(e *raftpb.Entry) {
 		zap.String("data", string(e.Data)),
 	)
 	// TODO: callback OnApply to use state machine
-	if err := g.fsm.Apply(e.Data); err != nil {
-		lg.Error("[RaftGroup] apply entry to user fsm failed",
+	if err := g.usm.OnApply(e.Data); err != nil {
+		lg.Error("[RaftGroup] apply entry to user sm failed",
 			zap.Uint64("index", e.Index),
 			zap.Uint64("term", e.Term),
 			zap.String("data", string(e.Data)),
@@ -688,7 +757,7 @@ func (g *RaftGroup) triggerSnapshot() {
 
 	lg.Info("[RaftGroup] triggering snapshot",
 		zap.Uint64("group-id", g.groupID),
-		zap.String("local-id", g.ID().String()),
+		zap.String("peer-id", g.PeerID().String()),
 		zap.Uint64("local-applied-index", appliedi),
 		zap.Uint64("local-snapshot-index", snapi),
 		zap.Uint64("local-snapshot-count", g.Cfg.SnapshotCount),
@@ -699,14 +768,46 @@ func (g *RaftGroup) triggerSnapshot() {
 }
 
 func (g *RaftGroup) snapshot(snapi uint64, cs raftpb.ConfState) {
-	// TODO: callback user fsm to gather snapshot information
 	lg := g.getLogger()
 
-	metadata := g.topology.Marshal()
+	// TODO: callback user sm to gather snapshot information
+	r, err := g.usm.OnSnapshotSave()
+	if err != nil {
+		lg.Fatal("[RaftGroup] on snapshot save failed",
+			zap.Uint64("group-id", g.groupID),
+			zap.String("peer-id", g.peerID.String()),
+			zap.Uint64("snapshot-index", snapi),
+			zap.Error(err),
+		)
+	}
+	rp, err := r.Marshal()
+	if err != nil {
+		lg.Fatal("[RaftGroup] snapshot state machine metadata marshal",
+			zap.Uint64("group-id", g.groupID),
+			zap.String("peer-id", g.peerID.String()),
+			zap.Uint64("snapshot-index", snapi),
+			zap.Error(err),
+		)
+	}
+
+	topologyMeta := g.topology.Marshal()
+
+	metadata, err := (&etransport.SnapshotMetadata{
+		UserStateMachineMeta: rp,
+		TopologyMeta:         topologyMeta,
+	}).Marshal()
+	if err != nil {
+		lg.Fatal("[RaftGroup] snapshot metadata marshal",
+			zap.Uint64("group-id", g.groupID),
+			zap.String("peer-id", g.peerID.String()),
+			zap.Uint64("snapshot-index", snapi),
+			zap.Error(err),
+		)
+	}
 
 	lg.Info("[RaftGroup] snapshot",
 		zap.Uint64("group-id", g.groupID),
-		zap.String("local-id", g.peerID.String()),
+		zap.String("peer-id", g.peerID.String()),
 		zap.Uint64("snapshot-index", snapi),
 		zap.String("metadata", string(metadata)),
 	)
@@ -715,7 +816,7 @@ func (g *RaftGroup) snapshot(snapi uint64, cs raftpb.ConfState) {
 	if err != nil {
 		lg.Fatal("[RaftGroup] snapshot create failed",
 			zap.Uint64("group-id", g.groupID),
-			zap.String("local-id", g.ID().String()),
+			zap.String("peer-id", g.PeerID().String()),
 			zap.Uint64("snapshot-index", snapi),
 			zap.Error(err),
 		)
@@ -724,7 +825,7 @@ func (g *RaftGroup) snapshot(snapi uint64, cs raftpb.ConfState) {
 	if err := g.r.storage.SaveSnap(snapshot); err != nil {
 		lg.Fatal("[RaftGroup] snapshot save failed",
 			zap.Uint64("group-id", g.groupID),
-			zap.String("local-id", g.ID().String()),
+			zap.String("peer-id", g.PeerID().String()),
 			zap.Uint64("snapshot-index", snapi),
 			zap.Error(err),
 		)
@@ -739,7 +840,7 @@ func (g *RaftGroup) snapshot(snapi uint64, cs raftpb.ConfState) {
 	firstIndex, _ := g.r.storage.FirstIndex()
 	lg.Debug("[RaftGroup] before compacting",
 		zap.Uint64("group-id", g.groupID),
-		zap.String("local-id", g.ID().String()),
+		zap.String("peer-id", g.PeerID().String()),
 		zap.Uint64("snapshot-index", snapi),
 		zap.Uint64("compact-index", compacti),
 		zap.Uint64("first-index", firstIndex),
@@ -762,7 +863,7 @@ func (g *RaftGroup) snapshot(snapi uint64, cs raftpb.ConfState) {
 	firstIndex, _ = g.r.storage.FirstIndex()
 	lg.Debug("[RaftGroup] after compacting",
 		zap.Uint64("group-id", g.groupID),
-		zap.String("local-id", g.ID().String()),
+		zap.String("peer-id", g.PeerID().String()),
 		zap.Uint64("snapshot-index", snapi),
 		zap.Uint64("compact-index", compacti),
 		zap.Uint64("first-index", firstIndex),
@@ -790,8 +891,8 @@ func (g *RaftGroup) updateCommitedIndex(ci uint64) {
 	}
 }
 
-func (g *RaftGroup) isLeader() bool {
-	return uint64(g.ID()) == g.Lead()
+func (g *RaftGroup) IsLeader() bool {
+	return uint64(g.PeerID()) == g.Lead()
 }
 
 func (g *RaftGroup) setCommittedIndex(v uint64) {
@@ -834,16 +935,18 @@ func (g *RaftGroup) getLead() uint64 {
 	return atomic.LoadUint64(&g.lead)
 }
 
-// RaftStatusGetter represents etcd server and Raft progress.
 type RaftStatusGetter interface {
-	ID() types.ID
+	GroupID() uint64
+	PeerID() types.ID
 	Leader() types.ID
 	CommittedIndex() uint64
 	AppliedIndex() uint64
 	Term() uint64
 }
 
-func (g *RaftGroup) ID() types.ID { return g.topology.PeerID() }
+func (g *RaftGroup) GroupID() uint64 { return g.groupID }
+
+func (g *RaftGroup) PeerID() types.ID { return g.topology.PeerID() }
 
 func (g *RaftGroup) Leader() types.ID { return types.ID(g.getLead()) }
 
