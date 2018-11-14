@@ -1,10 +1,12 @@
 #!/bin/bash
 
-set -x
+# for debuging
+#set -x
 
 RAFT_EXAMPLE_BIN=./raftgrpexample
 RAFT_RPC_PORT_BASE=9527
 PORTAL_RPC_PORT_BASE=9021
+PPROF_PORT_BASE=6060
 
 function Usage {
   echo "Usage: $0 TotalNodes NodeID"
@@ -71,8 +73,9 @@ function StartN {
 
   local raftRpcPort=`expr ${RAFT_RPC_PORT_BASE} + $2 - 1`
   local portalRpcPort=`expr ${PORTAL_RPC_PORT_BASE} + $2 - 1`
+  local pprofPort=`expr ${PPROF_PORT_BASE} + $2 - 1`
   echo "start node ${1}"
-  $RAFT_EXAMPLE_BIN -gid 1 -id ${nodeID} -cluster "${cluster}" -grpc-addr "127.0.0.1:${raftRpcPort}" -port ${portalRpcPort} -new-cluster true 2>&1 | tee node${nodeID}.log
+  $RAFT_EXAMPLE_BIN -pprof-port ${pprofPort} -gid 1 -id ${nodeID} -cluster "${cluster}" -grpc-addr "127.0.0.1:${raftRpcPort}" -port ${portalRpcPort} -new-cluster true 2>&1 | tee node${nodeID}.log
 }
 
 [[ $# -lt 2 ]] && Usage

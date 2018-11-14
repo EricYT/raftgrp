@@ -28,24 +28,24 @@ const (
 	snapshotReadFailed
 )
 
-// rpc server manager
-type serverManager struct {
+// transport server
+type transportServer struct {
 	Logger *zap.Logger
 
 	Addr string
 	s    *grpc.Server
 
-	rs *raftServer
+	rs *raftServer // raft grpc service server
 }
 
-func (sm *serverManager) Start() error {
+func (sm *transportServer) Start() error {
 	lis, err := net.Listen("tcp", sm.Addr)
 	if err != nil {
-		sm.Logger.Error("[serverManager] listen failed",
+		sm.Logger.Error("[transportServer] listen failed",
 			zap.String("address", sm.Addr),
 			zap.Error(err),
 		)
-		return errors.Wrapf(err, "[serverManager] listen addrss %s error", sm.Addr)
+		return errors.Wrapf(err, "[transportServer] listen addrss %s error", sm.Addr)
 	}
 	sm.s = grpc.NewServer()
 
@@ -54,35 +54,26 @@ func (sm *serverManager) Start() error {
 
 	// blocking
 	if err := sm.s.Serve(lis); err != nil {
-		sm.Logger.Error("[serverManager] serve failed",
+		sm.Logger.Error("[transportServer] serve failed",
 			zap.String("address", sm.Addr),
 			zap.Error(err),
 		)
-		return errors.Wrap(err, "[serverManager] tcp serve error")
+		return errors.Wrap(err, "[transportServer] tcp serve error")
 	}
-
 	return nil
 }
 
-func (sm *serverManager) Stop() {
+func (sm *transportServer) Stop() {
 	sm.s.Stop()
-}
-
-type Handler interface {
-	// raft operations
-	Process(ctx context.Context, gid uint64, m *raftpb.Message) error
-
-	// snapshot
-	UnmarshalSnapshotWriter(ctx context.Context, gid uint64, p []byte) (SnapshotWriter, error)
-	UnmarshalSnapshotParter(ctx context.Context, gid uint64, p []byte) (SnapshotParter, error)
 }
 
 type raftServer struct {
 	Logger *zap.Logger
-	hnd    Handler
-	tm     *TransportManager
+
+	tm *TransportManager
 }
 
+// receive message from others
 func (rs *raftServer) Send(stream proto.RaftGrouper_SendServer) error {
 
 	var (
@@ -132,6 +123,8 @@ readloop:
 		return err
 	}
 
+	// TODO: dispatcher message to transport
+
 	// TODO: snapshot sync snapshot here
 	if m.Type == raftpb.MsgSnap && !raft.IsEmptySnap(m.Snapshot) {
 		if err := rs.syncSnapshotFromLeader(gid, m); err != nil {
@@ -175,7 +168,7 @@ func (rs *raftServer) SnapshotRead(req *proto.SnapshotReaderRequest, stream prot
 	)
 
 	// create snapshot part reader
-	reader, err := parter.CreateReader()
+	reader, err := parter.OpenReader()
 	if err != nil {
 		rs.Logger.Error("[raftServer] create snpashot part reader failed.",
 			append(gidFields, zap.Error(err))...,
@@ -245,6 +238,7 @@ func (rs *raftServer) syncSnapshotFromLeader(gid uint64, m *raftpb.Message) (err
 	// read snapshot
 	parters := snapWriter.Next()
 	for parter := range parters {
+		// Encoding parter for send it back to sender
 		parterPayload, err := parter.Marshal()
 		if err != nil {
 			rs.Logger.Error("[raftServer] marshal pater failed",
@@ -260,7 +254,8 @@ func (rs *raftServer) syncSnapshotFromLeader(gid uint64, m *raftpb.Message) (err
 			zap.String("detail", string(parterPayload)),
 		)
 
-		partWriter, err := parter.CreateWriter()
+		// Be careful to close the writer
+		partWriter, err := parter.OpenWriter()
 		if err != nil {
 			rs.Logger.Error("[raftServer] snapshot create part writer failed.",
 				zap.Uint64("group-id", gid),
@@ -269,11 +264,11 @@ func (rs *raftServer) syncSnapshotFromLeader(gid uint64, m *raftpb.Message) (err
 			)
 			return err
 		}
-		defer partWriter.Close()
 
 		// read data from remote
 		t, ok := rs.tm.GetTransport(gid)
 		if !ok {
+			partWriter.Close()
 			rs.Logger.Error("[raftServer] get transport instance failed.",
 				zap.Uint64("group-id", gid),
 			)
@@ -327,6 +322,7 @@ func (rs *raftServer) syncSnapshotFromLeader(gid uint64, m *raftpb.Message) (err
 		}
 
 		if err := t.WithClient(types.ID(m.From), hnd); err != nil {
+			partWriter.Close()
 			rs.Logger.Error("[raftServer] snapshot parter sync failed",
 				zap.Uint64("group-id", gid),
 				zap.Error(err),
@@ -334,6 +330,7 @@ func (rs *raftServer) syncSnapshotFromLeader(gid uint64, m *raftpb.Message) (err
 			return err
 		}
 
+		partWriter.Close()
 	}
 
 	return nil

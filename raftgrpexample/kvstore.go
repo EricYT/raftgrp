@@ -5,6 +5,8 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"log"
+	"os"
+	"path"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/EricYT/go-examples/utils/wait"
 	"github.com/EricYT/raftgrp"
 	"github.com/EricYT/raftgrp/transport"
+	"github.com/davecgh/go-spew/spew"
 	"github.com/pkg/errors"
 	"go.etcd.io/etcd/pkg/types"
 )
@@ -19,6 +22,11 @@ import (
 var (
 	ErrBlobStoreNotFound error = errors.New("blob: not found")
 	ErrKvStoreNotFound   error = errors.New("kv: not found")
+)
+
+const (
+	metaDirectory string = "meta"
+	blobDirectory string = "blob"
 )
 
 // This implementation is not same as etcd raft example,
@@ -170,34 +178,118 @@ func (kv *kvstore) OnSnapshotSave() (sr transport.SnapshotReader, err error) {
 	snap.Dir = "./volume1"
 	snap.Meta["date"] = time.Now().Format(time.RFC1123)
 
-	snap.Directories = []*transport.Directory{
-		&transport.Directory{
-			Dir: "/blob",
-			Files: []*transport.File{
-				&transport.File{
-					Filename:  "/blob/foo.txt",
-					ParentDir: snap.Dir,
-				},
-				&transport.File{
-					Filename:  "/blob/foo-1.txt",
-					ParentDir: snap.Dir,
-				},
-			},
-		},
-		&transport.Directory{
-			Dir: "/meta",
-			Files: []*transport.File{
-				&transport.File{
-					Filename:  "/meta/bar.txt",
-					ParentDir: snap.Dir,
-				},
-				&transport.File{
-					Filename:  "/meta/bar-1.txt",
-					ParentDir: snap.Dir,
-				},
-			},
-		},
+	// test codes
+	dh, err := os.Open(snap.Dir)
+	if err != nil {
+		return nil, err
 	}
+	defer dh.Close()
+
+	fs, err := dh.Readdir(0)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, file := range fs {
+		if !file.IsDir() {
+			continue
+		}
+		log.Printf("[kvstore] directory name: %s\n", file.Name())
+		switch path.Base(file.Name()) {
+		case metaDirectory:
+			snapdir := &transport.Directory{
+				Dir: path.Join("/", metaDirectory),
+			}
+			log.Printf("[kvstore] meta directory operation")
+			metah, err := os.Open(path.Join(snap.Dir, file.Name()))
+			if err != nil {
+				return nil, err
+			}
+			metafs, err := metah.Readdir(0)
+			if err != nil {
+				metah.Close()
+				return nil, err
+			}
+			metah.Close()
+			for _, metaf := range metafs {
+				if metaf.IsDir() {
+					continue
+				}
+				log.Printf("[kvstore] meta directory file: %s\n", metaf.Name())
+				f := &transport.File{
+					Filename: path.Join(snapdir.Dir, metaf.Name()),
+					Size:     metaf.Size(),
+					Meta:     make(map[string]string),
+				}
+				f.Meta["name"] = metaf.Name()
+				snapdir.Files = append(snapdir.Files, f)
+			}
+			snap.Directories = append(snap.Directories, snapdir)
+
+		case blobDirectory:
+			log.Printf("[kvstore] blob directory operation")
+			snapdir := &transport.Directory{
+				Dir: path.Join("/", blobDirectory),
+			}
+			blobh, err := os.Open(path.Join(snap.Dir, file.Name()))
+			if err != nil {
+				return nil, err
+			}
+			blobs, err := blobh.Readdir(0)
+			if err != nil {
+				blobh.Close()
+				return nil, err
+			}
+			blobh.Close()
+			for _, blob := range blobs {
+				if blob.IsDir() {
+					continue
+				}
+				log.Printf("[kvstore] blob directory file: %s\n", blob.Name())
+				f := &transport.File{
+					Filename: path.Join(snapdir.Dir, blob.Name()),
+					Size:     blob.Size(),
+					Meta:     make(map[string]string),
+				}
+				f.Meta["name"] = blob.Name()
+				snapdir.Files = append(snapdir.Files, f)
+			}
+			snap.Directories = append(snap.Directories, snapdir)
+
+		default:
+		}
+	}
+
+	spew.Dump(snap)
+
+	// snap.Directories = []*transport.Directory{
+	// 	&transport.Directory{
+	// 		Dir: "/blob",
+	// 		Files: []*transport.File{
+	// 			&transport.File{
+	// 				Filename:  "/blob/foo.txt",
+	// 				ParentDir: snap.Dir,
+	// 			},
+	// 			&transport.File{
+	// 				Filename:  "/blob/foo-1.txt",
+	// 				ParentDir: snap.Dir,
+	// 			},
+	// 		},
+	// 	},
+	// 	&transport.Directory{
+	// 		Dir: "/meta",
+	// 		Files: []*transport.File{
+	// 			&transport.File{
+	// 				Filename:  "/meta/bar.txt",
+	// 				ParentDir: snap.Dir,
+	// 			},
+	// 			&transport.File{
+	// 				Filename:  "/meta/bar-1.txt",
+	// 				ParentDir: snap.Dir,
+	// 			},
+	// 		},
+	// 	},
+	// }
 
 	return transport.NewSnapshotFileReader(snap), nil
 }

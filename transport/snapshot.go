@@ -57,10 +57,19 @@ type SnapshotIterator interface {
 }
 
 type SnapshotParter interface {
-	CreateReader() (CloseReader, error)
-	CreateWriter() (CloseWriter, error)
+	SnapshotPartReader
+	SnapshotPartWriter
+
 	Marshaler
 	Metadata() map[string]string
+}
+
+type SnapshotPartReader interface {
+	OpenReader() (CloseReader, error)
+}
+
+type SnapshotPartWriter interface {
+	OpenWriter() (CloseWriter, error)
 }
 
 type Marshaler interface {
@@ -204,7 +213,8 @@ func (s *SnapshotFileWriter) Commit() (err error) {
 	for _, dir := range s.Directories {
 		targetDir := path.Join(s.TargetDir, dir.Dir)
 		// move the old one
-		backupDir := fmt.Sprintf("backup-%s-%d", targetDir, backupSuffix)
+		backupDir := fmt.Sprintf("backup-%s-%d", path.Base(dir.Dir), backupSuffix)
+		backupDir = path.Join(s.TargetDir, backupDir)
 		log.Printf("[SnapshotFileWriter] original directory:(%s) rename to(%s)\n", targetDir, backupDir)
 		if err = os.Rename(targetDir, backupDir); err != nil {
 			return errors.Wrapf(err, "[SnapshotFileWriter] rename (%s) to (%s) failed\n", targetDir, backupDir)
@@ -241,20 +251,20 @@ func NewFile() *File {
 	}
 }
 
-func (f *File) CreateReader() (CloseReader, error) {
+func (f *File) OpenReader() (CloseReader, error) {
 	// FIXME: User has the responsibility to close the file handle
-	fh, err := os.OpenFile(f.FullFilename(), os.O_RDONLY, snapDirPerm)
+	fh, err := os.OpenFile(f.Fullname(), os.O_RDONLY, snapDirPerm)
 	if err != nil {
-		return nil, errors.Wrapf(err, "[File] open file(%s) failed. %v", f.FullFilename(), err)
+		return nil, errors.Wrapf(err, "[File] open file(%s) failed. %v", f.Fullname(), err)
 	}
 	return fh, nil
 }
 
-func (f *File) CreateWriter() (CloseWriter, error) {
+func (f *File) OpenWriter() (CloseWriter, error) {
 	// FIXME: User has the responsibility to close the file handle
-	fh, err := os.OpenFile(f.FullFilename(), os.O_WRONLY|os.O_TRUNC|os.O_CREATE, snapFilePerm)
+	fh, err := os.OpenFile(f.Fullname(), os.O_WRONLY|os.O_TRUNC|os.O_CREATE, snapFilePerm)
 	if err != nil {
-		return nil, errors.Wrapf(err, "[File] open file(%s) failed. %v", f.FullFilename(), err)
+		return nil, errors.Wrapf(err, "[File] open file(%s) failed. %v", f.Fullname(), err)
 	}
 	return fh, nil
 }
@@ -277,7 +287,7 @@ func (f *File) Metadata() map[string]string {
 	return f.Meta
 }
 
-func (f *File) FullFilename() string {
+func (f *File) Fullname() string {
 	log.Printf("[File] parent dir:(%s) filename:(%s)\n", f.ParentDir, f.Filename)
 	return path.Join(f.ParentDir, f.Filename)
 }

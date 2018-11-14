@@ -28,7 +28,7 @@ type TransportManager struct {
 	sm *serverManager
 }
 
-func NewTransportManager(lg *zap.Logger, addr string, hnd Handler) *TransportManager {
+func NewTransportManager(lg *zap.Logger, addr string) *TransportManager {
 	ccm := &clientConnManager{
 		Logger:  lg,
 		clients: make(map[string]*Client),
@@ -40,12 +40,10 @@ func NewTransportManager(lg *zap.Logger, addr string, hnd Handler) *TransportMan
 		Addr:   addr,
 		rs: &raftServer{
 			Logger: lg,
-			hnd:    hnd,
 		},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-
 	ccm.ctx = ctx
 
 	tm := &TransportManager{
@@ -62,7 +60,7 @@ func NewTransportManager(lg *zap.Logger, addr string, hnd Handler) *TransportMan
 	return tm
 }
 
-func (tm *TransportManager) CreateTransport(lg *zap.Logger, gid uint64) Transport {
+func (tm *TransportManager) CreateTransport(lg *zap.Logger, gid uint64, r Raft) Transport {
 	if lg == nil {
 		lg = tm.Logger
 	}
@@ -71,11 +69,27 @@ func (tm *TransportManager) CreateTransport(lg *zap.Logger, gid uint64) Transpor
 		mgr:    tm.ccm,
 		gid:    gid,
 		peers:  make(map[types.ID]peer),
+		r:      r,
 	}
 	tm.mu.Lock()
 	tm.transports[gid] = t
 	tm.mu.Unlock()
 	return t
+}
+
+func (tm *TransportManager) RemoveTransport(gid uint64) (err error) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	t, ok := tm.transports[gid]
+	if !ok {
+		return nil
+	}
+	err = t.Close()
+	if err != nil {
+		return err
+	}
+	delete(tm.transports, gid)
+	return nil
 }
 
 func (tm *TransportManager) GetTransport(gid uint64) (t Transport, ok bool) {

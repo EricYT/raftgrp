@@ -8,10 +8,16 @@ import (
 
 	"github.com/EricYT/raftgrp"
 	"go.uber.org/zap"
+
+	// pprof
+	"net/http"
+	_ "net/http/pprof"
 )
 
 func main() {
 	fmt.Println("raft group example go...")
+	pprofPort := flag.Int("pprof-port", 6060, "pprof port")
+
 	id := flag.Int("id", 1, "node id")
 	gid := flag.Int("gid", 1, "group id")
 	cluster := flag.String("cluster", "1=127.0.0.1:9527,2=127.0.0.1:9528", "comma separated cluster peers")
@@ -19,6 +25,11 @@ func main() {
 	port := flag.Int("port", 9021, "admin port")
 	newCluster := flag.Bool("new-cluster", false, "join an existing cluster")
 	flag.Parse()
+
+	// pprof
+	go func() {
+		log.Fatalln(http.ListenAndServe(fmt.Sprintf("localhost:%d", *pprofPort), nil))
+	}()
 
 	logger := zap.NewExample()
 	log.Printf("raft ready to start cluster: %s id: %d gid: %d admin-port: %d grpc-address: %s join: %t", *cluster, *id, *gid, *port, *grpc, *newCluster)

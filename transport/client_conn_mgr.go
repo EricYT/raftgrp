@@ -44,7 +44,15 @@ func (c *clientConnManager) WithClient(addr string, f func(ctx context.Context, 
 	c.mu.Unlock()
 
 	// FIXME: safe run or go attach ?
-	return f(c.ctx, client)
+	err := f(c.ctx, client)
+	if err != nil {
+		// FIXME: remove the connection
+		client.close()
+		c.mu.Lock()
+		delete(c.clients, addr)
+		c.mu.Unlock()
+	}
+	return err
 }
 
 func (c *clientConnManager) Stop() {
@@ -63,7 +71,12 @@ type Client struct {
 }
 
 func newClient(addr string) (*Client, error) {
-	conn, err := grpc.Dial(addr, grpc.WithInsecure())
+	conn, err := grpc.Dial(addr,
+		grpc.WithInsecure(),
+		//grpc.WithBlock(), // The default connection will create non-blocking
+		//grpc.WithTimeout(time.Second*1),
+		// FIXME: writeBufferSize ?
+	)
 	if err != nil {
 		return nil, err
 	}
