@@ -88,7 +88,7 @@ type RaftGroup struct {
 	usm UserStateMachine
 }
 
-func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err error) {
+func NewRaftGroup(cfg GroupConfig, tf func(g *RaftGroup) etransport.Transport) (grp *RaftGroup, err error) {
 	var (
 		n raft.Node
 
@@ -220,13 +220,16 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 		topology: topology,
 	}
 
+	// generate transport
+	t := tf(grp)
+
 	// initialize transport
 	for _, m := range grp.topology.Members() {
 		if grp.peerID != m.ID {
 			cfg.Logger.Info("[RaftGroup] add peer ",
 				zap.Uint64("peer-id", uint64(m.ID)),
 				zap.String("addr", m.Addr))
-			t.AddPeer(m.ID, []string{m.Addr})
+			t.AddPeer(m.ID, m.Addr)
 		}
 	}
 
@@ -237,7 +240,7 @@ func NewRaftGroup(cfg GroupConfig, t etransport.Transport) (grp *RaftGroup, err 
 				zap.Uint64("peer-id", r.ID),
 				zap.String("addr", r.Addr),
 			)
-			t.AddPeer(types.ID(r.ID), []string{r.Addr})
+			t.AddPeer(types.ID(r.ID), r.Addr)
 		}
 	}
 
@@ -348,7 +351,7 @@ func (g *RaftGroup) renderMessage(ms []raftpb.Message) ([]raftpb.Message, error)
 }
 
 // Process takes a raft message and applies it to the server's raft state.
-func (g *RaftGroup) Process(ctx context.Context, m *raftpb.Message) error {
+func (g *RaftGroup) Process(ctx context.Context, m raftpb.Message) error {
 	if g.topology.IsIDRemoved(types.ID(m.From)) {
 		return ErrIDRemoved
 	}
@@ -380,7 +383,7 @@ func (g *RaftGroup) Process(ctx context.Context, m *raftpb.Message) error {
 			}
 		}
 	}
-	return g.r.Step(ctx, *m)
+	return g.r.Step(ctx, m)
 }
 
 func (g *RaftGroup) IsIDRemoved(id uint64) bool {
@@ -568,7 +571,7 @@ func (g *RaftGroup) applySnapshot(snap raftpb.Snapshot) error {
 		}
 		for _, m := range g.topology.Members() {
 			if m.ID != g.peerID {
-				g.r.transport.AddPeer(m.ID, []string{m.Addr})
+				g.r.transport.AddPeer(m.ID, m.Addr)
 			}
 		}
 
@@ -710,7 +713,7 @@ func (g *RaftGroup) applyConfChange(cc raftpb.ConfChange) bool {
 		g.topology.AddMember(m)
 
 		if m.ID != g.peerID {
-			g.r.transport.AddPeer(m.ID, []string{m.Addr})
+			g.r.transport.AddPeer(m.ID, m.Addr)
 		}
 
 	case raftpb.ConfChangeRemoveNode:
@@ -889,6 +892,14 @@ func (g *RaftGroup) updateCommitedIndex(ci uint64) {
 	if ci > i {
 		g.setCommittedIndex(ci)
 	}
+}
+
+func (g *RaftGroup) UnmarshalSnapshotParter(d []byte) (parter etransport.SnapshotParter, err error) {
+	return g.usm.UnmarshalSnapshotParter(d)
+}
+
+func (g *RaftGroup) UnmarshalSnapshotWriter(d []byte) (parter etransport.SnapshotWriter, err error) {
+	return g.usm.UnmarshalSnapshotWriter(d)
 }
 
 func (g *RaftGroup) IsLeader() bool {

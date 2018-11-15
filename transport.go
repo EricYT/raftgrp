@@ -13,7 +13,7 @@ import (
 
 type Transporter interface {
 	Send(m []raftpb.Message)
-	AddPeer(id types.ID, urls []string)
+	AddPeer(id types.ID, addr string)
 	RemovePeer(id types.ID)
 	RemoveAllPeers()
 }

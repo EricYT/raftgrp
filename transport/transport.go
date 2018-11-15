@@ -1,17 +1,23 @@
 package transport
 
 import (
-	"bytes"
 	"context"
-	"io"
 	"sync"
 
-	"github.com/EricYT/raftgrp/proto"
+	"github.com/pkg/errors"
 	"go.etcd.io/etcd/pkg/types"
 	"go.etcd.io/etcd/raft"
 	"go.etcd.io/etcd/raft/raftpb"
 	"go.uber.org/zap"
-	"google.golang.org/grpc"
+)
+
+const (
+	recvMsgSize int = 1024
+	propMsgSize int = 100 // 4M payload
+)
+
+var (
+	ErrTransportPeerNotFound error = errors.New("[transport] peer not found")
 )
 
 type Transport interface {
@@ -19,51 +25,73 @@ type Transport interface {
 	// Each message has a To field, if the id is not exist
 	// in peers, ignore it.
 	Send(m []raftpb.Message)
+	Process(m raftpb.Message)
 
-	AddPeer(id types.ID, urls []string)
+	AddPeer(id types.ID, addr string)
 	RemovePeer(id types.ID)
 	RemoveAllPeers()
 
-	// Snapshot
-	WithClient(to types.ID, hnd func(ctx context.Context, client *Client) error) error
+	// snapshot
+	UnmarshalSnapshotWriter(p []byte) (SnapshotWriter, error)
+	UnmarshalSnapshotParter(p []byte) (SnapshotParter, error)
+
+	//
+	getPeerAddr(peerID types.ID) (addr string, err error)
+
+	Close()
 }
 
 type Raft interface {
 	// raft operations
-	Process(ctx context.Context, gid uint64, m *raftpb.Message) error
+	Process(ctx context.Context, m raftpb.Message) error
 
 	// snapshot
-	UnmarshalSnapshotWriter(ctx context.Context, gid uint64, p []byte) (SnapshotWriter, error)
-	UnmarshalSnapshotParter(ctx context.Context, gid uint64, p []byte) (SnapshotParter, error)
+	UnmarshalSnapshotWriter(p []byte) (SnapshotWriter, error)
+	UnmarshalSnapshotParter(p []byte) (SnapshotParter, error)
 }
 
 var _ Transport = (*transportV1)(nil)
 
 type transportV1 struct {
-	Logger *zap.Logger
-
-	cm ClientConnManager
+	Logger  *zap.Logger
+	cm      *clientManager
+	gid     uint64
+	localID types.ID
 
 	mu    sync.RWMutex
 	peers map[types.ID]Peer
-	gid   uint64
 	r     Raft
 }
 
-func NewTransportV1(lg *zap.Logger, gid uint64, cm ClientConnManager, r Raft) *transportV1 {
+func newTransportV1(lg *zap.Logger, gid uint64, localID types.ID, cm *clientManager, r Raft) *transportV1 {
 	t := &transportV1{
-		Logger: lg,
-		cm:     cm,
-		peers:  make(map[types.ID]Peer),
-		gid:    gid,
-		r:      r,
+		Logger:  lg,
+		cm:      cm,
+		peers:   make(map[types.ID]Peer),
+		gid:     gid,
+		localID: localID,
+		r:       r,
 	}
-
 	return t
 }
 
-func (t *transportV1) Close() error {
-	panic("not implement")
+func (t *transportV1) getPeerAddr(peerID types.ID) (addr string, err error) {
+	t.mu.RLock()
+	p, ok := t.peers[peerID]
+	t.mu.RUnlock()
+	if ok {
+		return p.getAddr(), nil
+	}
+	return "", ErrTransportPeerNotFound
+}
+
+func (t *transportV1) Close() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, p := range t.peers {
+		p.stop()
+	}
+	t.peers = make(map[types.ID]Peer)
 }
 
 func (t *transportV1) AddPeer(id types.ID, addr string) {
@@ -73,10 +101,11 @@ func (t *transportV1) AddPeer(id types.ID, addr string) {
 		// alrady exist
 		return
 	}
-	t.peers[id] = startPeer(t, t.gid, id, addr)
+	t.peers[id] = startPeer(t.Logger, t.gid, t.localID, id, addr, t.cm, t.r)
 
 	t.Logger.Info("[transportV1] add remote peer",
 		zap.Uint64("group-id", t.gid),
+		zap.String("local-id", t.localID.String()),
 		zap.String("peer-id", id.String()),
 		zap.String("address", addr),
 	)
@@ -94,7 +123,23 @@ func (t *transportV1) RemoveAllPeers() {
 	for id := range t.peers {
 		t.removePeer(id)
 	}
-	t.peers = nil
+}
+
+func (t *transportV1) removePeer(id types.ID) {
+	p, ok := t.peers[id]
+	if !ok {
+		return
+	}
+	p.stop()
+	delete(t.peers, id)
+}
+
+func (t *transportV1) UnmarshalSnapshotWriter(p []byte) (SnapshotWriter, error) {
+	return t.r.UnmarshalSnapshotWriter(p)
+}
+
+func (t *transportV1) UnmarshalSnapshotParter(p []byte) (SnapshotParter, error) {
+	return t.r.UnmarshalSnapshotParter(p)
 }
 
 func (t *transportV1) Send(m []raftpb.Message) {
@@ -105,142 +150,60 @@ func (t *transportV1) Send(m []raftpb.Message) {
 		to := types.ID(msg.To)
 
 		t.mu.RLock()
-		peer, ok := t.peers[to]
+		p, ok := t.peers[to]
 		t.mu.RUnlock()
 		if !ok {
+			t.Logger.Warn("[transportV1] failed to get peer from transport",
+				zap.Uint64("group-id", t.gid),
+				zap.String("local-id", t.localID.String()),
+				zap.String("peer-id", to.String()),
+			)
 			continue
 		}
-
-		if err := t.mgr.WithClient(peer.addr, func(ctx context.Context, c *Client) error {
-			return t.sendMessageToPeer(ctx, c, &msg)
-		}); err != nil {
-			t.Logger.Error("[transportV1] send msg to peer erorr",
-				zap.Uint64("peer-id", uint64(to)),
-				zap.String("peer-addr", peer.addr),
+		if err := p.send(msg); err != nil {
+			t.Logger.Error("[transportV1] failed to send message",
+				zap.Uint64("group-id", t.gid),
+				zap.String("local-id", t.localID.String()),
+				zap.String("peer-id", to.String()),
 				zap.Error(err),
 			)
 		}
 	}
 }
 
-func (t *transportV1) WithClient(to types.ID, hnd func(ctx context.Context, c *Client) error) error {
+func (t *transportV1) Process(m raftpb.Message) {
+	from := types.ID(m.From)
 	t.mu.RLock()
-	peer, ok := t.peers[to]
+	p, ok := t.peers[from]
 	t.mu.RUnlock()
 	if !ok {
-		return ErrTransportNotFound
-	}
-	return t.mgr.WithClient(peer.addr, hnd)
-}
-
-func (t *transportV1) Stop() {
-}
-
-func (t *transportV1) sendMessageToPeer(ctx context.Context, c *Client, msg *raftpb.Message) error {
-	payload, err := msg.Marshal()
-	if err != nil {
-		t.Logger.Warn("[transportV1] marshal raft payload error",
-			zap.Any("message", msg),
-			zap.Error(err),
+		t.Logger.Warn("[transportV1] failed to get peer from transport for processing message",
+			zap.Uint64("group-id", t.gid),
+			zap.String("local-id", t.localID.String()),
+			zap.String("peer-id", from.String()),
 		)
-		return err
+		return
 	}
-	payloadBuf := bytes.NewReader(payload)
-
-	rc, err := c.RaftGrouperClient().Send(ctx, grpc.EmptyCallOption{})
-	if err != nil {
-		t.Logger.Warn("[transportV1] create a stream to peer failed",
-			zap.String("peer-addr", c.addr),
-			zap.Error(err),
-		)
-		return err
-	}
-
-	// send message matadata firstly
-	meta := &proto.SendRequest{
-		Msg: &proto.SendRequest_Meta{
-			Meta: &proto.Metadata{
-				GroupId: int64(t.gid),
-			},
-		},
-	}
-	if err := rc.Send(meta); err != nil {
-		t.Logger.Warn("[transportV1] send message to peer failed",
-			zap.String("peer-addr", c.addr),
-			zap.Any("metadata", meta),
-			zap.Error(err),
-		)
-		rc.CloseSend()
-		return err
-	}
-
-	// TODO: send message payload 1m per slice
-	// FIXME: 1Kb => 512Kb
-	buf := make([]byte, 1*1024)
-	for {
-		n, err := payloadBuf.Read(buf)
-		if n > 0 {
-			message := &proto.SendRequest{
-				Msg: &proto.SendRequest_Payload{
-					Payload: &proto.Playload{
-						Data: buf[:n],
-					},
-				},
-			}
-			if err := rc.Send(message); err != nil {
-				t.Logger.Error("[transportV1] send message error",
-					zap.Error(err),
-				)
-				rc.CloseSend()
-				return err
-			}
-		}
-		if err != nil {
-			if err != io.EOF {
-				t.Logger.Error("[transportV1] read payload buffer failed",
-					zap.String("peer-addr", c.addr),
-					zap.Error(err),
-				)
-				rc.CloseSend()
-				return err
-			}
-			break
-		}
-	}
-
-	reply, err := rc.CloseAndRecv()
-	if err != nil {
-		t.Logger.Error("[transportV1] close and recv failed",
-			zap.String("peer-addr", c.addr),
-			zap.Error(err),
-		)
-		return err
-	}
-	if reply.Ack.Code != 0 {
-		t.Logger.Debug("[transportV1] send message failed",
-			zap.String("peer-addr", c.addr),
-			zap.Int64("code", reply.Ack.Code),
-			zap.Any("reply", reply),
-		)
-	}
-	return nil
+	p.process(m)
 }
 
 type Peer interface {
-	Send(m []raftpb.Message)
-	Stop()
+	send(m raftpb.Message) error
+	process(m raftpb.Message) error
+	stop()
+	getAddr() string
 }
 
 type peer struct {
-	lg   *zap.Logger
-	gid  uint64
-	id   types.ID // remote peer id
-	addr string
-	r    Raft
+	lg      *zap.Logger
+	gid     uint64
+	localID types.ID
+	peerID  types.ID // peer id
+	addr    string
+	r       Raft
 
-	// streams
-	writer *streamWriter
-	reader *streamReader
+	// for sending messages to others
+	cm *clientManager
 
 	// for receiving messages from others
 	recvc chan raftpb.Message
@@ -254,18 +217,19 @@ type peer struct {
 	stopc  chan struct{}
 }
 
-func startPeer(t *transportV1, gid uint64, id types.ID, addr string) *peer {
+func startPeer(lg *zap.Logger, gid uint64, localid, peerid types.ID, addr string, cm *clientManager, r Raft) *peer {
 	p := &peer{
-		lg:   t.Logger,
-		gid:  gid,
-		id:   id,
-		addr: addr,
+		lg:      lg,
+		gid:     gid,
+		localID: localid,
+		peerID:  peerid,
+		addr:    addr,
+		r:       r,
+		cm:      cm,
 
 		recvc: make(chan raftpb.Message, recvMsgSize),
-		propc: make(chan raftpb.Message, propMSgSize),
+		propc: make(chan raftpb.Message, propMsgSize),
 		stopc: make(chan struct{}),
-
-		writer: startStreamWriter(t.Logger, gid, id, addr),
 	}
 
 	p.ctx, p.cancel = context.WithCancel(context.Background())
@@ -303,43 +267,55 @@ func startPeer(t *transportV1, gid uint64, id types.ID, addr string) *peer {
 		}
 	}()
 
-	p.reader = &streamReader{
-		lg:    t.Logger,
-		gid:   gid,
-		id:    id,
-		recvc: p.recvc,
-		propc: p.propc,
-		// FIXME: rate limitter
-	}
-	p.reader.Start()
+	// FIXME: reader
 
 	return p
 }
 
-func (p *peer) send(m raftpb.Message) {
+func (p *peer) send(m raftpb.Message) error {
 	p.mu.Lock()
 	pause := p.paused
 	p.mu.Unlock()
 
 	if pause {
-		return
+		return nil
 	}
 
-	writec := p.writer.writec
+	c, err := p.cm.pick(p.addr)
+	if err != nil {
+		p.lg.Error("[peer] failed to pick a client for sending messages",
+			zap.Uint64("group-id", p.gid),
+			zap.String("local-id", p.localID.String()),
+			zap.String("peer-id", p.peerID.String()),
+			zap.String("address", p.addr),
+			zap.Error(err),
+		)
+		return err
+	}
+
+	writec := c.writec()
 	select {
-	case writec <- m:
+	case writec <- msgWrapper{groupID: p.gid, peerID: p.peerID, msg: m}: // FIXME: ctx used
 	default:
 		p.lg.Warn("[peer] dropped internal raft message since sending buffer is full",
 			zap.Uint64("group-id", p.gid),
-			zap.String("remote-id", p.id.String()),
+			zap.String("local-id", p.localID.String()),
+			zap.String("remote-id", p.peerID.String()),
 		)
 	}
+
+	return nil
 }
 
-func (p *peer) process(m raftpb.Message) {
-	recvc := p.reader.recvc
+func (p *peer) process(m raftpb.Message) error {
+	//p.lg.Info("[peer] process message from remote",
+	//	zap.Uint64("group-id", p.gid),
+	//	zap.String("peer-id", p.peerID.String()),
+	//)
+
+	recvc := p.recvc
 	if m.Type == raftpb.MsgApp {
-		recvc = p.reader.propc
+		recvc = p.propc
 	}
 
 	select {
@@ -351,11 +327,27 @@ func (p *peer) process(m raftpb.Message) {
 			zap.Uint64("remote-id", m.From),
 		)
 	}
+
+	return nil
 }
 
-func (p *peer) Stop() {
+func (p *peer) pause() {
+	p.mu.Lock()
+	p.paused = true
+	p.mu.Unlock()
+}
+
+func (p *peer) unpause() {
+	p.mu.Lock()
+	p.paused = false
+	p.mu.Unlock()
+}
+
+func (p *peer) stop() {
 	close(p.stopc)
 	p.cancel()
-	p.writer.Stop()
-	p.reader.Stop()
+}
+
+func (p *peer) getAddr() string {
+	return p.addr
 }

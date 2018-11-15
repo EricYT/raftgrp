@@ -29,3 +29,5 @@ _testmain.go
 
 raftgrpexample/log-*
 raftgrpexample/raftgrpexample
+raftgrpexample/node*
+raftgrpexample/volume2

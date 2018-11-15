@@ -10,7 +10,7 @@ import (
 	etransport "github.com/EricYT/raftgrp/transport"
 	"github.com/pkg/errors"
 	"go.etcd.io/etcd/pkg/fileutil"
-	"go.etcd.io/etcd/raft/raftpb"
+	"go.etcd.io/etcd/pkg/types"
 	"go.uber.org/zap"
 )
 
@@ -58,7 +58,7 @@ func NewRaftGroupManager(lg *zap.Logger, logdir, addr string) *RaftGroupManager 
 		addr:   addr,
 		groups: make(map[uint64]*RaftGroup),
 	}
-	rm.tm = etransport.NewTransportManager(lg, addr, rm)
+	rm.tm = etransport.NewTransportManager(lg, addr)
 
 	return rm
 }
@@ -67,46 +67,12 @@ func (rm *RaftGroupManager) Start() error {
 	// FIXME: If we try to reload all raft groups from here.
 	// It's a heavy operation maybe.
 
-	rm.tm.Start()
 	log.Println("[RaftGroupManager] start 4")
 	return nil
 }
 
 func (rm *RaftGroupManager) Stop() {
-	rm.tm.Stop()
-}
-
-// raft process dispatcher
-func (rm *RaftGroupManager) Process(ctx context.Context, gid uint64, m *raftpb.Message) error {
-	// FIXME: this operation will be bothered by raft group create and restart.
-	rm.mu.RLock()
-	g, ok := rm.groups[gid]
-	rm.mu.RUnlock()
-	if ok {
-		return g.Process(ctx, m)
-	}
-	return ErrRaftGroupManagerNotFound
-}
-
-// snapshot methods
-func (rm *RaftGroupManager) UnmarshalSnapshotWriter(ctx context.Context, gid uint64, p []byte) (etransport.SnapshotWriter, error) {
-	rm.mu.RLock()
-	g, ok := rm.groups[gid]
-	rm.mu.RUnlock()
-	if !ok {
-		return nil, ErrRaftGroupManagerNotFound
-	}
-	return g.usm.UnmarshalSnapshotWriter(p)
-}
-
-func (rm *RaftGroupManager) UnmarshalSnapshotParter(ctx context.Context, gid uint64, p []byte) (etransport.SnapshotParter, error) {
-	rm.mu.RLock()
-	g, ok := rm.groups[gid]
-	rm.mu.RUnlock()
-	if !ok {
-		return nil, ErrRaftGroupManagerNotFound
-	}
-	return g.usm.UnmarshalSnapshotParter(p)
+	// FIXME: shutdown group manager gracefully
 }
 
 func (rm *RaftGroupManager) NewRaftGroup(lg *zap.Logger, gid, id uint64, peers []string, newCluster bool) (*RaftGroup, error) {
@@ -141,8 +107,10 @@ func (rm *RaftGroupManager) newRaftGroup(lg *zap.Logger, gid, id uint64, peers [
 		return nil, errors.Wrap(terr, "[RaftGroupManager] create raft group parent directory error")
 	}
 
-	trans := rm.tm.CreateTransport(lg, gid)
-	grp, err := NewRaftGroup(GroupConfig{
+	trans := func(g *RaftGroup) etransport.Transport {
+		return rm.tm.CreateTransport(lg, gid, types.ID(id), g)
+	}
+	g, err := NewRaftGroup(GroupConfig{
 		Logger:                 lg,
 		ID:                     id,
 		GID:                    gid,
@@ -167,8 +135,9 @@ func (rm *RaftGroupManager) newRaftGroup(lg *zap.Logger, gid, id uint64, peers [
 		zap.Uint64("group-id", gid),
 		zap.Uint64("id", id),
 	)
-	rm.groups[gid] = grp
-	return grp, nil
+	rm.groups[gid] = g
+
+	return g, nil
 }
 
 func (rm *RaftGroupManager) restartRaftGroup(lg *zap.Logger, gid, id uint64) (*RaftGroup, error) {
@@ -181,7 +150,9 @@ func (rm *RaftGroupManager) restartRaftGroup(lg *zap.Logger, gid, id uint64) (*R
 		return g, ErrRaftGroupManagerLaunched
 	}
 
-	trans := rm.tm.CreateTransport(lg, gid)
+	trans := func(g *RaftGroup) etransport.Transport {
+		return rm.tm.CreateTransport(lg, gid, types.ID(id), g)
+	}
 	grp, err := NewRaftGroup(GroupConfig{
 		Logger:                 lg,
 		ID:                     id,

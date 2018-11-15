@@ -1,7 +1,6 @@
 package transport
 
 import (
-	"context"
 	"sync"
 
 	"github.com/pkg/errors"
@@ -16,64 +15,42 @@ var (
 type TransportManager struct {
 	Logger *zap.Logger
 
-	ctx    context.Context
-	cancel context.CancelFunc
-
 	mu         sync.RWMutex
 	transports map[uint64]Transport
 
-	// for client view
-	ccm *clientConnManager
-	// for server view
-	sm *serverManager
+	c *clientManager
+	t *transportServer
 }
 
 func NewTransportManager(lg *zap.Logger, addr string) *TransportManager {
-	ccm := &clientConnManager{
-		Logger:  lg,
-		clients: make(map[string]*Client),
-		stopc:   make(chan struct{}),
-	}
-
-	sm := &serverManager{
-		Logger: lg,
-		Addr:   addr,
-		rs: &raftServer{
-			Logger: lg,
-		},
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	ccm.ctx = ctx
-
 	tm := &TransportManager{
 		Logger:     lg,
-		ctx:        ctx,
-		cancel:     cancel,
-		ccm:        ccm,
-		sm:         sm,
 		transports: make(map[uint64]Transport),
 	}
 
-	sm.rs.tm = tm
+	tm.t = newTransportServer(lg, tm, addr)
+	tm.c = newClientManager(lg)
 
 	return tm
 }
 
-func (tm *TransportManager) CreateTransport(lg *zap.Logger, gid uint64, r Raft) Transport {
+func (tm *TransportManager) CreateTransport(lg *zap.Logger, gid uint64, localID types.ID, r Raft) Transport {
+	tm.Logger.Info("[TransportManager] create transport",
+		zap.Uint64("group-id", gid),
+		zap.String("local-id", localID.String()),
+	)
+
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	t, ok := tm.transports[gid]
+	if ok {
+		return t
+	}
 	if lg == nil {
 		lg = tm.Logger
 	}
-	t := &transportV1{
-		Logger: lg,
-		mgr:    tm.ccm,
-		gid:    gid,
-		peers:  make(map[types.ID]peer),
-		r:      r,
-	}
-	tm.mu.Lock()
+	t = newTransportV1(lg, gid, localID, tm.c, r)
 	tm.transports[gid] = t
-	tm.mu.Unlock()
 	return t
 }
 
@@ -84,10 +61,7 @@ func (tm *TransportManager) RemoveTransport(gid uint64) (err error) {
 	if !ok {
 		return nil
 	}
-	err = t.Close()
-	if err != nil {
-		return err
-	}
+	t.Close()
 	delete(tm.transports, gid)
 	return nil
 }
@@ -99,13 +73,13 @@ func (tm *TransportManager) GetTransport(gid uint64) (t Transport, ok bool) {
 	return t, ok
 }
 
-func (tm *TransportManager) Start() error {
-	// FIXME: How to handle the transport manager crash?
-	go tm.sm.Start()
-	return nil
-}
-
-func (tm *TransportManager) Stop() {
-	tm.sm.Stop()
-	tm.ccm.Stop()
+func (tm *TransportManager) Close() {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	for _, t := range tm.transports {
+		t.Close()
+	}
+	tm.transports = make(map[uint64]Transport)
+	tm.t.close()
+	tm.c.close()
 }

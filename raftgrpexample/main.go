@@ -44,13 +44,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("[main] new raft group error: %s", err)
 	}
+	kv := newKvStore(grp)
+	// set usm for group
+	grp.SetUserStateMachine(kv)
+
 	grp.Start()
 	defer grp.Stop()
 	log.Println("raft group start ok")
-	kv := newKvStore(grp)
-
-	// set usm for group
-	grp.SetUserStateMachine(kv)
 
 	// serve http
 	serveHttpKVAPI(kv, *port)
