@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
+	"crypto/rand"
 	"encoding/json"
 	"log"
 	"os"
@@ -14,7 +16,6 @@ import (
 	"github.com/EricYT/go-examples/utils/wait"
 	"github.com/EricYT/raftgrp"
 	"github.com/EricYT/raftgrp/transport"
-	"github.com/davecgh/go-spew/spew"
 	"github.com/pkg/errors"
 	"go.etcd.io/etcd/pkg/types"
 )
@@ -77,10 +78,11 @@ func (kv *kvstore) Lookup(key string) (val []byte, err error) {
 }
 
 type kvMeta struct {
-	ReqId   uint64 `json:"req_id"`
-	Key     string `json:"key"`
-	BId     BlobId `json:"b_id"`
-	Payload []byte `json:"payload"`
+	ReqId   uint64         `json:"req_id"`
+	Key     string         `json:"key"`
+	BId     BlobId         `json:"b_id"`
+	MD5     [md5.Size]byte `json:"md_5"`
+	Payload []byte         `json:"payload"`
 }
 
 func (m *kvMeta) Marshal() []byte {
@@ -110,7 +112,7 @@ func (kv *kvstore) Put(key string, val []byte) (err error) {
 	log.Println("[kvstore] put blob id ", bid)
 
 	reqid := atomic.AddUint64(&kv.rid, 1)
-	meta := &kvMeta{ReqId: reqid, Key: key, BId: bid}
+	meta := &kvMeta{ReqId: reqid, Key: key, BId: bid, MD5: md5.Sum(val)}
 	payload := meta.Marshal()
 
 	done := kv.w.Register(reqid)
@@ -260,37 +262,6 @@ func (kv *kvstore) OnSnapshotSave() (sr transport.SnapshotReader, err error) {
 		}
 	}
 
-	spew.Dump(snap)
-
-	// snap.Directories = []*transport.Directory{
-	// 	&transport.Directory{
-	// 		Dir: "/blob",
-	// 		Files: []*transport.File{
-	// 			&transport.File{
-	// 				Filename:  "/blob/foo.txt",
-	// 				ParentDir: snap.Dir,
-	// 			},
-	// 			&transport.File{
-	// 				Filename:  "/blob/foo-1.txt",
-	// 				ParentDir: snap.Dir,
-	// 			},
-	// 		},
-	// 	},
-	// 	&transport.Directory{
-	// 		Dir: "/meta",
-	// 		Files: []*transport.File{
-	// 			&transport.File{
-	// 				Filename:  "/meta/bar.txt",
-	// 				ParentDir: snap.Dir,
-	// 			},
-	// 			&transport.File{
-	// 				Filename:  "/meta/bar-1.txt",
-	// 				ParentDir: snap.Dir,
-	// 			},
-	// 		},
-	// 	},
-	// }
-
 	return transport.NewSnapshotFileReader(snap), nil
 }
 
@@ -367,6 +338,11 @@ func (kv *kvstore) ProcessMessage(payload []byte) (p []byte, err error) {
 	meta.Unmarshal(payload)
 	log.Printf("[kvstore] process message payload: (%x)", md5.Sum(meta.Payload))
 
+	payloadMd5 := md5.Sum(payload)
+	if bytes.Equal(meta.MD5[:], payloadMd5[:]) {
+		panic("[kvstore] payload md5 not match")
+	}
+
 	bid, err := kv.blobStore.Put(meta.Payload)
 	if err != nil {
 		return nil, errors.Wrap(err, "kvstore: process message put blob error")
@@ -429,9 +405,24 @@ func (bs *blobStore) Start() (err error) {
 	return nil
 }
 
+var blobdata = make([]byte, 4*1024*1024)
+
+func init() {
+	n, err := rand.Read(blobdata)
+	if err != nil {
+		panic(err)
+	}
+	if n != 4*1024*1024 {
+		panic("random data failed")
+	}
+}
+
 func (bs *blobStore) Get(id BlobId) (blob []byte, err error) {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
+	// circuit breaker
+	//return blobdata, nil
+
 	if blob, ok := bs.blobStore[id]; ok {
 		return blob, nil
 	}
@@ -443,6 +434,7 @@ func (bs *blobStore) Put(blob []byte) (id BlobId, err error) {
 	defer bs.mu.Unlock()
 	id = bs.id
 	bs.id++
+	// FIXME: for testing, discard all data
 	bs.blobStore[id] = blob
 	return id, nil
 }

@@ -23,8 +23,8 @@ var (
 const (
 	defaultTickMs                 int    = 1000
 	defaultElectionTicks          int    = 5
-	defaultSnapshotCount          uint64 = 10
-	defaultSnapshotCatchUpEntries uint64 = 5
+	defaultSnapshotCount          uint64 = 30000
+	defaultSnapshotCatchUpEntries uint64 = 500
 )
 
 type RaftGroupManager struct {

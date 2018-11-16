@@ -295,7 +295,7 @@ func (p *peer) send(m raftpb.Message) error {
 
 	writec := c.writec()
 	select {
-	case writec <- msgWrapper{groupID: p.gid, peerID: p.peerID, msg: m}: // FIXME: ctx used
+	case writec <- msgWrapper{groupID: p.gid, localID: p.localID, peerID: p.peerID, msg: m}: // FIXME: ctx used
 	default:
 		p.lg.Warn("[peer] dropped internal raft message since sending buffer is full",
 			zap.Uint64("group-id", p.gid),

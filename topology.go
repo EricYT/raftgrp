@@ -242,7 +242,6 @@ func (m *Member) Clone() *Member {
 
 func (m *Member) IsStarted() bool {
 	panic("not implement")
-	return false
 }
 
 // sort by member id

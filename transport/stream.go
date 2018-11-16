@@ -25,7 +25,7 @@ const (
 
 type msgWrapper struct {
 	groupID uint64
-	localId types.ID
+	localID types.ID
 	peerID  types.ID
 	msg     raftpb.Message
 }
